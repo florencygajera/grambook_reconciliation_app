@@ -821,7 +821,7 @@ def _write_sheet_table(ws, headers: list[str], rows: list[dict[str, Any]], heade
         ws.column_dimensions[get_column_letter(idx)].width = width
 
 
-def build_xlsx(result, original_admin_file):
+def build_xlsx(result):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
 
@@ -839,7 +839,7 @@ def build_xlsx(result, original_admin_file):
     ws['A4'] = "Summary"
     ws['A4'].font = Font(bold=True, size=12)
     
-    stats = result["stats"]
+    stats = result.get("stats", {})
     row = 5
     ws[f'A{row}'] = "Total Records"
     ws[f'B{row}'] = stats.get("total", 0)
@@ -857,30 +857,43 @@ def build_xlsx(result, original_admin_file):
     ws[f'B{row}'] = stats.get("only_s", 0)
 
     # Discrepancies section
-    if result["discrepancies"]:
+    discrepancies = result.get("discrepancies", [])
+    admin_cols = result.get("admin_cols", [])
+    
+    if discrepancies and admin_cols:
         row += 2
         ws[f'A{row}'] = "Discrepancies"
         ws[f'A{row}'].font = Font(bold=True, size=11)
         
         row += 1
-        admin_cols = result["admin_cols"]
         for col_idx, col in enumerate(admin_cols, 1):
             cell = ws.cell(row=row, column=col_idx, value=col)
             cell.fill = PatternFill(start_color="FFE6E6", end_color="FFE6E6", fill_type="solid")
             cell.font = Font(bold=True)
 
-        for disc in result["discrepancies"]:
+        for disc in discrepancies:
             row += 1
+            admin_row = disc.get("admin_row", {})
+            diffs = disc.get("diffs", {})
+            
             for col_idx, col in enumerate(admin_cols, 1):
-                val = disc["admin_row"].get(col, "")
+                val = admin_row.get(col, "")
                 cell = ws.cell(row=row, column=col_idx, value=val)
-                if col in disc["diffs"]:
+                if col in diffs:
                     cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
                     cell.font = Font(color="FFFFFF", bold=True)
 
     # Set column widths
-    for col in range(1, len(result["admin_cols"]) + 1):
-        ws.column_dimensions[chr(64 + col if col <= 26 else 64 + (col // 26) + chr(64 + (col % 26)))].width = 20
+    if admin_cols:
+        for col in range(1, len(admin_cols) + 1):
+            # Convert column number to Excel column letter (A, B, C, ..., AA, AB, etc.)
+            col_letter = ""
+            temp = col
+            while temp > 0:
+                temp -= 1
+                col_letter = chr(65 + (temp % 26)) + col_letter
+                temp //= 26
+            ws.column_dimensions[col_letter].width = 20
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -1055,7 +1068,7 @@ def download():
         suv_key = _resolve_key_column(suv_key_raw, suv.columns)
 
         result = reconcile(admin.rows, admin.columns, suv.rows, suv.columns, admin_key, suv_key)
-        buf = build_xlsx(result, admin_file)
+        buf = build_xlsx(result)
 
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
