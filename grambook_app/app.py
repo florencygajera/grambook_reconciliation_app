@@ -7,6 +7,7 @@ Then open http://localhost:5000
 import io
 import os
 import re
+import shutil
 import unicodedata
 from datetime import datetime
 
@@ -26,7 +27,104 @@ try:
 except ImportError:
     pytesseract = None
 
+try:
+    import winreg
+except ImportError:
+    winreg = None
+
 app = Flask(__name__, static_folder="static")
+
+
+def _iter_registry_tesseract_paths():
+    if winreg is None:
+        return []
+
+    roots = [
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ]
+    found = []
+    for root, subkey in roots:
+        try:
+            with winreg.OpenKey(root, subkey) as key:
+                i = 0
+                while True:
+                    try:
+                        child_name = winreg.EnumKey(key, i)
+                        i += 1
+                        with winreg.OpenKey(key, child_name) as child:
+                            try:
+                                display_name = winreg.QueryValueEx(child, "DisplayName")[0]
+                            except OSError:
+                                continue
+                            if "tesseract" not in str(display_name).lower():
+                                continue
+
+                            for value_name in ("InstallLocation", "UninstallString"):
+                                try:
+                                    raw = str(winreg.QueryValueEx(child, value_name)[0]).strip().strip('"')
+                                except OSError:
+                                    continue
+                                if not raw:
+                                    continue
+                                candidate = raw if raw.lower().endswith(".exe") else os.path.join(raw, "tesseract.exe")
+                                if os.path.basename(candidate).lower() == "tesseract-uninstall.exe":
+                                    candidate = os.path.join(os.path.dirname(candidate), "tesseract.exe")
+                                if os.path.isdir(candidate):
+                                    candidate = os.path.join(candidate, "tesseract.exe")
+                                found.append(candidate)
+                    except OSError:
+                        break
+        except OSError:
+            continue
+    return found
+
+
+def _configure_tesseract():
+    """
+    Configure pytesseract executable path on Windows/non-standard installs.
+    Priority:
+    1. TESSERACT_CMD env var
+    2. PATH (shutil.which)
+    3. Common Windows install paths
+    """
+    if pytesseract is None:
+        return
+
+    candidates = []
+    env_cmd = os.getenv("TESSERACT_CMD", "").strip()
+    if env_cmd:
+        candidates.append(env_cmd)
+
+    path_cmd = shutil.which("tesseract")
+    if path_cmd:
+        candidates.append(path_cmd)
+
+    local_app_data = os.getenv("LOCALAPPDATA", "").strip()
+    if local_app_data:
+        candidates.append(
+            os.path.join(local_app_data, "Programs", "Tesseract-OCR", "tesseract.exe")
+        )
+
+    candidates.extend(
+        [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ]
+    )
+    candidates.extend(_iter_registry_tesseract_paths())
+
+    for cmd in candidates:
+        if cmd and os.path.isfile(cmd):
+            pytesseract.pytesseract.tesseract_cmd = cmd
+            tessdata_dir = os.path.join(os.path.dirname(cmd), "tessdata")
+            if os.path.isdir(tessdata_dir) and not os.getenv("TESSDATA_PREFIX"):
+                os.environ["TESSDATA_PREFIX"] = tessdata_dir
+            break
+
+
+_configure_tesseract()
 
 
 def _border():
