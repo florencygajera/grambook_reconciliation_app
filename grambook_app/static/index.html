@@ -60,6 +60,10 @@ header p{font-size:.78rem;color:var(--muted);margin-top:4px;font-weight:300;}
 .map-panel.show{display:block;animation:fadeIn .3s ease;}
 .map-panel h2{font-size:.95rem;font-weight:600;margin-bottom:5px;}
 .map-panel p{font-size:.75rem;color:var(--muted);margin-bottom:22px;}
+.map-panel .header-config{margin-bottom:24px;padding:20px;background:rgba(79,142,247,.05);border-radius:12px;border:1px solid rgba(79,142,247,.2);}
+.map-panel .header-config h3{font-size:.85rem;font-weight:600;margin-bottom:8px;color:var(--accent);}
+.map-panel .header-config p{font-size:.7rem;color:var(--muted);margin-bottom:16px;}
+.map-panel .header-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
 .map-row{display:grid;grid-template-columns:1fr 44px 1fr;align-items:end;gap:12px;}
 .map-field label{display:block;font-size:.68rem;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:7px;}
 .map-field label.adm{color:var(--adm);}
@@ -184,8 +188,61 @@ tr.os-row td{background:rgba(38,198,218,.055);}
 
 <!-- MAPPING -->
 <div class="map-panel" id="mapPanel">
-  <h2>🔗 Select the common ID column</h2>
+  <h2>🔗 Configure Data Import</h2>
   <p>Pick the column in each file that uniquely identifies the same record (e.g. Property ID, Citizen Code, Transaction No).</p>
+  <!-- Header Configuration -->
+  <div class="header-config">
+    <h3>📋 Header Configuration</h3>
+    <p>Configure how many rows contain header information (titles, test types, etc.)</p>
+    <div class="header-row">
+      <div class="map-field">
+        <label class="adm">Admin — header row start</label>
+        <select id="adminHeaderRow">
+          <option value="">Auto-detect</option>
+          <option value="1">Row 1</option>
+          <option value="2">Row 2</option>
+          <option value="3">Row 3</option>
+          <option value="4">Row 4</option>
+          <option value="5">Row 5</option>
+        </select>
+      </div>
+      <div class="map-field">
+        <label class="adm">Admin — header span</label>
+        <select id="adminHeaderSpan">
+          <option value="">Auto-detect</option>
+          <option value="1">1 row</option>
+          <option value="2">2 rows</option>
+          <option value="3">3 rows</option>
+          <option value="4">4 rows</option>
+          <option value="5">5 rows</option>
+        </select>
+      </div>
+    </div>
+    <div class="header-row">
+      <div class="map-field">
+        <label class="suv">Suvidha — header row start</label>
+        <select id="suvidhaHeaderRow">
+          <option value="">Auto-detect</option>
+          <option value="1">Row 1</option>
+          <option value="2">Row 2</option>
+          <option value="3">Row 3</option>
+          <option value="4">Row 4</option>
+          <option value="5">Row 5</option>
+        </select>
+      </div>
+      <div class="map-field">
+        <label class="suv">Suvidha — header span</label>
+        <select id="suvidhaHeaderSpan">
+          <option value="">Auto-detect</option>
+          <option value="1">1 row</option>
+          <option value="2">2 rows</option>
+          <option value="3">3 rows</option>
+          <option value="4">4 rows</option>
+          <option value="5">5 rows</option>
+        </select>
+      </div>
+    </div>
+  </div>
   <div class="map-row">
     <div class="map-field">
       <label class="adm">Admin — key column</label>
@@ -303,6 +360,10 @@ document.getElementById('submitBtn').addEventListener('click', () => {
   fd.append('suvidha_file', suvidhaFile);
   fd.append('admin_key',    document.getElementById('adminKey').value);
   fd.append('suv_key',      document.getElementById('suvidhaKey').value);
+  fd.append('admin_header_row', document.getElementById('adminHeaderRow').value);
+  fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
+  fd.append('suv_header_row', document.getElementById('suvidhaHeaderRow').value);
+  fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
 
   fetch('/api/reconcile', { method: 'POST', body: fd })
     .then(r => r.json())
@@ -331,6 +392,10 @@ document.getElementById('dlBtn').addEventListener('click', () => {
   fd.append('suvidha_file', suvidhaFile);
   fd.append('admin_key',    document.getElementById('adminKey').value);
   fd.append('suv_key',      document.getElementById('suvidhaKey').value);
+  fd.append('admin_header_row', document.getElementById('adminHeaderRow').value);
+  fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
+  fd.append('suv_header_row', document.getElementById('suvidhaHeaderRow').value);
+  fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
 
   fetch('/api/download', { method: 'POST', body: fd })
     .then(r => {

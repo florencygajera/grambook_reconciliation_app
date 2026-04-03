@@ -425,12 +425,12 @@ def build_headers(
 
     max_cols = max(len(r) for r in matrix)
     local_rows: list[list[str]] = []
-    for i in range(header_start, min(header_start + 3, len(matrix))):
+    for i in range(header_start, min(header_start + 5, len(matrix))):
         row = matrix[i] if i < len(matrix) else [""] * max_cols
         row = row + [""] * (max_cols - len(row))
         local_rows.append(_forward_fill_header_cells(row))
 
-    spans = [manual_header_span] if manual_header_span in (1, 2, 3) else [3, 2, 1]
+    spans = [manual_header_span] if manual_header_span in (1, 2, 3, 4, 5) else [5, 4, 3, 2, 1]
     chosen_span = 1
     best_score = -1.0
 
@@ -448,6 +448,18 @@ def build_headers(
 
         non_empty = sum(1 for h in headers if h)
         score = non_empty - sum(1 for h in headers if len(h) > 90) * 1.5
+
+        # Bonus for multi-header patterns (baki, test types, etc.)
+        multi_header_bonus = 0
+        for row_idx in range(span):
+            row_text = " ".join(local_rows[row_idx]).lower()
+            if any(keyword in row_text for keyword in ["baki", "test", "type", "category", "status", "remark", "sr no", "serial"]):
+                multi_header_bonus += 2
+            if any(keyword in row_text for keyword in ["no", "number", "id", "code", "name"]):
+                multi_header_bonus += 1
+
+        score += multi_header_bonus
+
         if score > best_score:
             best_score = score
             chosen_span = span
