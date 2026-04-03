@@ -316,28 +316,28 @@ def read_file(file_storage):
     header_row_index = None
 
     for i in range(min(20, len(df))):
-    row = df.iloc[i].astype(str).str.strip()
+        row = df.iloc[i].astype(str).str.strip()
 
-    # Count meaningful cells
-    non_empty = row[row != ""]
-    
-    # Heuristic rules for header:
-    # 1. Has multiple columns
-    # 2. Mostly TEXT (not numbers)
-    # 3. No long sentences (avoid title rows)
+        # Count meaningful cells
+        non_empty = row[row != ""]
 
-    text_cells = sum(not v.replace('.', '', 1).isdigit() for v in non_empty)
-    
-    if (
-        len(non_empty) >= 4 and          # enough columns
-        text_cells >= len(non_empty) * 0.6 and  # mostly text
-        all(len(v) < 50 for v in non_empty)     # not long sentences
-    ):
-        header_row_index = i
-        break
+        # Heuristic rules for header:
+        # 1. Has multiple columns
+        # 2. Mostly TEXT (not numbers)
+        # 3. No long sentences (avoid title rows)
 
-if header_row_index is None:
-    raise Exception("❌ Could not detect proper header row.")
+        text_cells = sum(not v.replace('.', '', 1).isdigit() for v in non_empty)
+        
+        if (
+            len(non_empty) >= 4 and          # enough columns
+            text_cells >= len(non_empty) * 0.6 and  # mostly text
+            all(len(v) < 50 for v in non_empty)     # not long sentences
+        ):
+            header_row_index = i
+            break
+
+    if header_row_index is None:
+        raise Exception("❌ Could not detect proper header row.")
 
     # 🔥 STEP 3: Set header
     df.columns = df.iloc[header_row_index]
