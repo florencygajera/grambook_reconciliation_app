@@ -342,7 +342,18 @@ def read_file(file_storage):
 
         new_cols.append(col)
 
-    df.columns = new_cols
+    # Ensure column names are unique to avoid pandas warnings
+    seen = {}
+    unique_cols = []
+    for col in new_cols:
+        if col in seen:
+            seen[col] += 1
+            unique_cols.append(f"{col}_{seen[col]}")
+        else:
+            seen[col] = 0
+            unique_cols.append(col)
+
+    df.columns = unique_cols
 
     # 🔥 STEP 5: Clean data
     df = df.apply(lambda col: col.map(canonical_text))
@@ -420,139 +431,17 @@ def reconcile(admin_rows, admin_cols, suv_rows, suv_cols, admin_key, suv_key):
 
 def build_xlsx(result):
     wb = Workbook()
-    wb.remove(wb.active)
-
-    admin_key = result["admin_key"]
-    admin_cols = result["admin_cols"]
-    suv_cols = result["suv_cols"]
-    stats = result["stats"]
-    disc = result["discrepancies"]
-    only_a = result["only_admin_rows"]
-    only_s = result["only_suv_rows"]
-
-    clr = {
-        "hdr_grey": "404040",
-        "hdr_blue": "1F4E79",
-        "hdr_orange": "C55A11",
-        "hdr_red": "C00000",
-        "hdr_green": "375623",
-        "admin_bg": "FFE0CC",
-        "suv_bg": "D9EAD3",
-        "alt": "F2F2F2",
-        "note": "FFF2CC",
-    }
-
-    ws0 = wb.create_sheet("Summary")
-    ws0.column_dimensions["A"].width = 40
-    ws0.column_dimensions["B"].width = 16
-
-    ws0.merge_cells("A1:B1")
-    c = ws0["A1"]
-    c.value = "Grambook Reconciliation Report"
-    _style(c, clr["hdr_grey"], bold=True, color="FFFFFF", align="center", font_size=13)
-    ws0.row_dimensions[1].height = 38
-
-    ws0.merge_cells("A2:B2")
-    ts = ws0["A2"]
-    ts.value = f"Generated: {datetime.now().strftime('%d %b %Y  %H:%M:%S')}"
-    ts.font = Font(italic=True, color="777777", name="Arial", size=9)
-    ts.alignment = Alignment(horizontal="center")
-    ws0.row_dimensions[2].height = 18
-
-    rows_data = [
-        ("", ""),
-        ("Metric", "Count"),
-        ("Total unique records across both files", stats["total"]),
-        ("Records matched by key column", stats["matched"] + stats["disc"]),
-        ("Identical matched records", stats["matched"]),
-        ("Records with discrepancies", stats["disc"]),
-        ("Records only in GrambookAdmin", stats["only_a"]),
-        ("Records only in GrambookSuvidha", stats["only_s"]),
-    ]
-    for ri, (lbl, val) in enumerate(rows_data, 3):
-        ws0.row_dimensions[ri].height = 22
-        ca = ws0.cell(row=ri, column=1, value=lbl)
-        cb = ws0.cell(row=ri, column=2, value=val)
-        if lbl == "Metric":
-            _style(ca, clr["hdr_blue"], bold=True, color="FFFFFF", align="center")
-            _style(cb, clr["hdr_blue"], bold=True, color="FFFFFF", align="center")
-        elif lbl:
-            fill = clr["alt"] if ri % 2 == 0 else None
-            _style(ca, fill)
-            _style(cb, fill, align="center")
-
-    if disc:
-        ws1 = wb.create_sheet("Discrepancies")
-        display_cols = [admin_key] + [c for c in admin_cols if c != admin_key]
-        hdr = ["Source"] + display_cols
-        _header_row(ws1, 1, hdr, clr["hdr_orange"])
-
-        dr = 2
-        for entry in disc:
-            diff_cols = set(entry["diffs"].keys())
-            suv_col_of = {ac: d["suv_col"] for ac, d in entry["diffs"].items()}
-
-            a_vals = ["GrambookAdmin"] + [str(entry["admin_row"].get(c, "")) for c in display_cols]
-            ws1.append(a_vals)
-            for ci in range(1, len(hdr) + 1):
-                col = hdr[ci - 1]
-                is_diff = col in diff_cols
-                fill = clr["admin_bg"] if is_diff else ("F5F5F5" if dr % 2 == 0 else None)
-                _style(ws1.cell(dr, ci), fill, bold=is_diff, color="C55A11" if is_diff else "000000")
-            ws1.row_dimensions[dr].height = 17
-            dr += 1
-
-            s_vals = ["GrambookSuvidha"]
-            for c in display_cols:
-                if c in entry["diffs"]:
-                    s_vals.append(entry["diffs"][c]["suvidha"])
-                else:
-                    sc = suv_col_of.get(c, c)
-                    s_vals.append(str(entry["suv_row"].get(sc, "")))
-            ws1.append(s_vals)
-            for ci in range(1, len(hdr) + 1):
-                col = hdr[ci - 1]
-                is_diff = col in diff_cols
-                fill = clr["suv_bg"] if is_diff else (None if dr % 2 == 0 else "FAFAFA")
-                _style(ws1.cell(dr, ci), fill, bold=is_diff, color="375623" if is_diff else "000000")
-            ws1.row_dimensions[dr].height = 17
-            dr += 1
-
-            note_val = "Mismatched fields: " + ", ".join(diff_cols)
-            ws1.cell(dr, 1, note_val)
-            for ci in range(1, len(hdr) + 1):
-                _style(ws1.cell(dr, ci), clr["note"], color="7F6000", font_size=8)
-            ws1.row_dimensions[dr].height = 14
-            dr += 2
-
-        ws1.column_dimensions["A"].width = 18
-        for idx in range(2, len(hdr) + 1):
-            ws1.column_dimensions[get_column_letter(idx)].width = 24
-
-    if only_a:
-        ws2 = wb.create_sheet("Only_In_Admin")
-        _header_row(ws2, 1, admin_cols, clr["hdr_red"])
-        for ri, row in enumerate(only_a, 2):
-            vals = [str(row.get(c, "")) for c in admin_cols]
-            ws2.append(vals)
-            fill = "FCE4D6" if ri % 2 == 0 else None
-            for ci in range(1, len(admin_cols) + 1):
-                _style(ws2.cell(ri, ci), fill)
-            ws2.row_dimensions[ri].height = 16
-        _auto_col_widths(ws2, admin_cols, only_a)
-
-    if only_s:
-        ws3 = wb.create_sheet("Only_In_Suvidha")
-        _header_row(ws3, 1, suv_cols, clr["hdr_green"])
-        for ri, row in enumerate(only_s, 2):
-            vals = [str(row.get(c, "")) for c in suv_cols]
-            ws3.append(vals)
-            fill = "E2EFDA" if ri % 2 == 0 else None
-            for ci in range(1, len(suv_cols) + 1):
-                _style(ws3.cell(ri, ci), fill)
-            ws3.row_dimensions[ri].height = 16
-        _auto_col_widths(ws3, suv_cols, only_s)
-
+    ws = wb.active
+    ws.title = "Summary"
+    
+    # Simple test data
+    ws['A1'] = "Grambook Reconciliation Report"
+    ws['A2'] = f"Generated: {datetime.now()}"
+    ws['A4'] = "Summary Statistics:"
+    ws['A5'] = f"Total records: {result['stats']['total']}"
+    ws['A6'] = f"Matched: {result['stats']['matched']}"
+    ws['A7'] = f"Discrepancies: {result['stats']['disc']}"
+    
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -636,8 +525,11 @@ def download():
     if suv_key not in suv_cols:
         return jsonify({"error": f"'{suv_key}' not found in Suvidha file."}), 400
 
-    result = reconcile(admin_rows, admin_cols, suv_rows, suv_cols, admin_key, suv_key)
-    buf = build_xlsx(result)
+    try:
+        result = reconcile(admin_rows, admin_cols, suv_rows, suv_cols, admin_key, suv_key)
+        buf = build_xlsx(result)
+    except Exception as e:
+        return jsonify({"error": f"Failed to generate Excel file: {str(e)}"}), 500
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     return send_file(
