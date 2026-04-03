@@ -329,25 +329,65 @@ function checkBothUploaded() {
   const fd = new FormData();
   fd.append('admin_file',   adminFile);
   fd.append('suvidha_file', suvidhaFile);
+  fd.append('admin_header_row', document.getElementById('adminHeaderRow').value);
+  fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
+  fd.append('suv_header_row', document.getElementById('suvidhaHeaderRow').value);
+  fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
 
   fetch('/api/columns', { method: 'POST', body: fd })
     .then(r => r.json())
     .then(data => {
       if (data.error) { showErr(data.error); return; }
-      populateSel('adminKey',   data.admin_cols,  ['id','no','num','code','ref','adm']);
-      populateSel('suvidhaKey', data.suv_cols,    ['admin','id','no','num','code','ref']);
+      populateSel('adminKey',   data.admin_cols,  ['id','no','num','code','ref','adm'], data.admin_col_meta || []);
+      populateSel('suvidhaKey', data.suv_cols,    ['admin','id','no','num','code','ref'], data.suv_col_meta || []);
       document.getElementById('mapPanel').classList.add('show');
       document.getElementById('submitBtn').disabled = false;
     })
     .catch(e => showErr('Could not read columns: ' + e));
 }
 
-function populateSel(selId, cols, pref) {
+function populateSel(selId, cols, pref, colMeta) {
   const sel = document.getElementById(selId);
-  sel.innerHTML = cols.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
-  const guess = cols.find(c => pref.some(p => c.toLowerCase().includes(p))) || cols[0];
+  const metaByCol = {};
+  (colMeta || []).forEach(m => { if (m && m.column) metaByCol[m.column] = m; });
+
+  const groups = {};
+  cols.forEach(c => {
+    const m = metaByCol[c] || {};
+    const group = (m.group && m.group !== 'Other') ? m.group : 'Other';
+    const label = m.hierarchy || c;
+    if (!groups[group]) groups[group] = [];
+    groups[group].push({ value: c, label });
+  });
+
+  const groupNames = Object.keys(groups).sort((a, b) => {
+    if (a === 'Other') return 1;
+    if (b === 'Other') return -1;
+    return a.localeCompare(b);
+  });
+
+  let html = '';
+  groupNames.forEach(g => {
+    const opts = groups[g].map(item => `<option value="${esc(item.value)}">${esc(item.label)}</option>`).join('');
+    html += g === 'Other' ? opts : `<optgroup label="${esc(g)}">${opts}</optgroup>`;
+  });
+
+  sel.innerHTML = html;
+  const guess = cols.find(c => {
+    const m = metaByCol[c] || {};
+    const searchText = `${c} ${m.hierarchy || ''}`.toLowerCase();
+    return pref.some(p => searchText.includes(p));
+  }) || cols[0];
   if (guess) sel.value = guess;
 }
+
+['adminHeaderRow', 'adminHeaderSpan', 'suvidhaHeaderRow', 'suvidhaHeaderSpan'].forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('change', () => {
+    if (adminFile && suvidhaFile) checkBothUploaded();
+  });
+});
 
 // ── submit ─────────────────────────────────────────────────────────────────
 document.getElementById('submitBtn').addEventListener('click', () => {
@@ -398,8 +438,20 @@ document.getElementById('dlBtn').addEventListener('click', () => {
   fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
 
   fetch('/api/download', { method: 'POST', body: fd })
-    .then(r => {
-      if (!r.ok) return r.json().then(d => { throw new Error(d.error); });
+    .then(async r => {
+      const ct = (r.headers.get('content-type') || '').toLowerCase();
+      if (!r.ok) {
+        if (ct.includes('application/json')) {
+          const d = await r.json();
+          throw new Error(d.error || 'Download failed');
+        }
+        const txt = await r.text();
+        throw new Error(txt || 'Download failed');
+      }
+      if (ct.includes('application/json')) {
+        const d = await r.json();
+        throw new Error(d.error || 'Download failed');
+      }
       return r.blob();
     })
     .then(blob => {
@@ -407,7 +459,10 @@ document.getElementById('dlBtn').addEventListener('click', () => {
       const a   = document.createElement('a');
       const ts  = new Date().toISOString().slice(0,10);
       a.href = url; a.download = `grambook_reconciliation_${ts}.xlsx`;
-      a.click(); URL.revokeObjectURL(url);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
       dl.disabled = false;
       dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
     })

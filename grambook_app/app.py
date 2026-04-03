@@ -14,6 +14,7 @@ import shutil
 import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Any
@@ -81,6 +82,7 @@ INDIC_DIGIT_MAP = str.maketrans(
 class ParsedDataset:
     rows: list[dict[str, str]]
     columns: list[str]
+    column_meta: list[dict[str, Any]]
     normalized_map: dict[str, str]
     header_row_index: int
     header_row_span: int
@@ -178,6 +180,42 @@ def canonical_text(value: Any) -> str:
     text = text.translate(INDIC_DIGIT_MAP)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+EXCEL_ILLEGAL_CHARS_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
+
+
+def excel_safe_text(value: Any) -> str:
+    text = canonical_text(value)
+    return EXCEL_ILLEGAL_CHARS_RE.sub("", text)
+
+
+def _to_decimal_if_simple_number(value: str) -> Decimal | None:
+    text = canonical_text(value).replace(",", "")
+    if not text:
+        return None
+    if not re.fullmatch(r"[+-]?\d+(\.\d+)?", text):
+        return None
+    try:
+        return Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def values_equivalent_for_compare(left: Any, right: Any) -> bool:
+    l_txt = canonical_text(left)
+    r_txt = canonical_text(right)
+    if l_txt == r_txt:
+        return True
+
+    # Treat numeric formatting variants as equal (e.g. 330, 330.0, 330.00).
+    if "." in l_txt or "." in r_txt:
+        l_dec = _to_decimal_if_simple_number(l_txt)
+        r_dec = _to_decimal_if_simple_number(r_txt)
+        if l_dec is not None and r_dec is not None and l_dec == r_dec:
+            return True
+
+    return False
 
 
 def normalize_column_key(name: str) -> str:
@@ -415,6 +453,57 @@ def _is_unnamed_header(value: str) -> bool:
     return not v or v.startswith("unnamed")
 
 
+def _dedupe_in_order(values: list[str]) -> list[str]:
+    out: list[str] = []
+    for v in values:
+        if not v:
+            continue
+        if not out or out[-1] != v:
+            out.append(v)
+    return out
+
+
+def _build_column_meta(
+    matrix: list[list[str]],
+    header_start: int,
+    header_span: int,
+    kept_indices: list[int],
+    headers: list[str],
+) -> list[dict[str, Any]]:
+    max_cols = max(len(r) for r in matrix) if matrix else 0
+    header_rows: list[list[str]] = []
+    for i in range(header_start, min(header_start + header_span, len(matrix))):
+        row = matrix[i] if i < len(matrix) else [""] * max_cols
+        row = row + [""] * (max_cols - len(row))
+        header_rows.append(_forward_fill_header_cells(row))
+
+    out: list[dict[str, Any]] = []
+    for out_idx, original_col_idx in enumerate(kept_indices):
+        header_value = headers[out_idx] if out_idx < len(headers) else f"column_{out_idx}"
+        parts = []
+        for hr in header_rows:
+            if original_col_idx < len(hr):
+                parts.append(canonical_text(hr[original_col_idx]))
+        parts = _dedupe_in_order(parts)
+        if not parts:
+            parts = [header_value]
+
+        group = parts[0] if len(parts) > 1 else "Other"
+        hierarchy = " > ".join(parts)
+        hierarchy_short = " > ".join(parts[1:]) if len(parts) > 1 else header_value
+
+        out.append(
+            {
+                "column": header_value,
+                "group": group,
+                "parts": parts,
+                "hierarchy": hierarchy,
+                "hierarchy_short": hierarchy_short,
+            }
+        )
+    return out
+
+
 def build_headers(
     matrix: list[list[str]],
     header_start: int,
@@ -556,6 +645,14 @@ def dataframe_from_matrix(
         headers = [f"column_{i}" for i in range(len(kept_indices))]
         normalized_map = {normalize_column_key(h): h for h in headers}
 
+    column_meta = _build_column_meta(
+        matrix=matrix,
+        header_start=header_start,
+        header_span=header_span,
+        kept_indices=kept_indices,
+        headers=headers,
+    )
+
     df = pd.DataFrame(aligned_rows, columns=headers, dtype="string")
 
     for col in df.columns:
@@ -577,6 +674,7 @@ def dataframe_from_matrix(
     return ParsedDataset(
         rows=rows,
         columns=list(df.columns),
+        column_meta=column_meta,
         normalized_map=normalized_map,
         header_row_index=header_start,
         header_row_span=header_span,
@@ -703,7 +801,7 @@ def reconcile(
             av = canonical_text(a.get(ac, ""))
             sv = canonical_text(s.get(sc, ""))
 
-            if av != sv:
+            if not values_equivalent_for_compare(av, sv):
                 diffs[ac] = {
                     "admin": av,
                     "suvidha": sv,
@@ -806,12 +904,12 @@ def highlight_excel_fast(original_file, result):
 
 def _write_sheet_table(ws, headers: list[str], rows: list[dict[str, Any]], header_fill: str = "1F4E78") -> None:
     for c, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=c, value=h)
+        cell = ws.cell(row=1, column=c, value=excel_safe_text(h))
         _style_cell(cell, fill_hex=header_fill, bold=True, color="FFFFFF", align="center", wrap=True)
 
     for r_idx, row in enumerate(rows, 2):
         for c_idx, h in enumerate(headers, 1):
-            value = row.get(h, "")
+            value = excel_safe_text(row.get(h, ""))
             cell = ws.cell(row=r_idx, column=c_idx, value=value)
             _style_cell(cell)
 
@@ -830,30 +928,30 @@ def build_xlsx(result):
     ws.title = "Reconciliation"
 
     # Title
-    ws['A1'] = "Grambook Reconciliation Report"
+    ws['A1'] = excel_safe_text("Grambook Reconciliation Report")
     ws['A1'].font = Font(bold=True, size=14)
-    ws['A2'] = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    ws['A2'] = excel_safe_text(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     ws['A2'].font = Font(italic=True, size=9)
 
     # Summary
-    ws['A4'] = "Summary"
+    ws['A4'] = excel_safe_text("Summary")
     ws['A4'].font = Font(bold=True, size=12)
     
     stats = result.get("stats", {})
     row = 5
-    ws[f'A{row}'] = "Total Records"
+    ws[f'A{row}'] = excel_safe_text("Total Records")
     ws[f'B{row}'] = stats.get("total", 0)
     row += 1
-    ws[f'A{row}'] = "Matched"
+    ws[f'A{row}'] = excel_safe_text("Matched")
     ws[f'B{row}'] = stats.get("matched", 0)
     row += 1
-    ws[f'A{row}'] = "Discrepancies"
+    ws[f'A{row}'] = excel_safe_text("Discrepancies")
     ws[f'B{row}'] = stats.get("disc", 0)
     row += 1
-    ws[f'A{row}'] = "Only in Admin"
+    ws[f'A{row}'] = excel_safe_text("Only in Admin")
     ws[f'B{row}'] = stats.get("only_a", 0)
     row += 1
-    ws[f'A{row}'] = "Only in Suvidha"
+    ws[f'A{row}'] = excel_safe_text("Only in Suvidha")
     ws[f'B{row}'] = stats.get("only_s", 0)
 
     # Discrepancies section
@@ -862,12 +960,12 @@ def build_xlsx(result):
     
     if discrepancies and admin_cols:
         row += 2
-        ws[f'A{row}'] = "Discrepancies"
+        ws[f'A{row}'] = excel_safe_text("Discrepancies")
         ws[f'A{row}'].font = Font(bold=True, size=11)
         
         row += 1
         for col_idx, col in enumerate(admin_cols, 1):
-            cell = ws.cell(row=row, column=col_idx, value=col)
+            cell = ws.cell(row=row, column=col_idx, value=excel_safe_text(col))
             cell.fill = PatternFill(start_color="FFE6E6", end_color="FFE6E6", fill_type="solid")
             cell.font = Font(bold=True)
 
@@ -877,7 +975,7 @@ def build_xlsx(result):
             diffs = disc.get("diffs", {})
             
             for col_idx, col in enumerate(admin_cols, 1):
-                val = admin_row.get(col, "")
+                val = excel_safe_text(admin_row.get(col, ""))
                 cell = ws.cell(row=row, column=col_idx, value=val)
                 if col in diffs:
                     cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
@@ -953,7 +1051,9 @@ def get_columns():
         return jsonify(
             {
                 "admin_cols": admin.columns,
+                "admin_col_meta": admin.column_meta,
                 "suv_cols": suv.columns,
+                "suv_col_meta": suv.column_meta,
                 "preview": {
                     "admin": {
                         "detected_header_row": admin.header_row_index + 1,
@@ -988,6 +1088,7 @@ def header_preview():
         return jsonify(
             {
                 "columns": parsed.columns,
+                "col_meta": parsed.column_meta,
                 "header_row": parsed.header_row_index + 1,
                 "header_span": parsed.header_row_span,
                 "sample_rows": sample_rows,
