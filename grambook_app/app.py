@@ -1048,6 +1048,9 @@ def download():
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
+        import traceback
+        print(f"Download error: {e}")
+        print(traceback.format_exc())
         return jsonify({"error": f"Failed to generate Excel report: {e}"}), 500
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
