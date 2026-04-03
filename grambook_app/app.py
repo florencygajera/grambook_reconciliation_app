@@ -629,15 +629,18 @@ def map_columns_smart(admin_cols: list[str], suv_cols: list[str], admin_key: str
 
     return mapped
 
-def _build_key_index(rows: list[dict[str, str]], key_col: str) -> tuple[dict[str, list[dict[str, str]]], int]:
-    idx: dict[str, list[dict[str, str]]] = defaultdict(list)
+def _build_key_index(rows: list[dict[str, str]], key_col: str):
+    idx = defaultdict(list)
     missing = 0
-    for row in rows:
+
+    for i, row in enumerate(rows):  # 🔥 track row index
         key = canonical_text(row.get(key_col, ""))
         if not key:
             missing += 1
             continue
-        idx[key].append(row)
+
+        idx[key].append((i, row))  # 🔥 store (row_index, row)
+
     return idx, missing
 
 
@@ -649,6 +652,7 @@ def reconcile(
     admin_key: str,
     suv_key: str,
 ) -> dict[str, Any]:
+
     admin_idx, admin_missing_keys = _build_key_index(admin_rows, admin_key)
     suv_idx, suv_missing_keys = _build_key_index(suv_rows, suv_key)
 
@@ -657,6 +661,7 @@ def reconcile(
 
     admin_keys = set(admin_idx)
     suv_keys = set(suv_idx)
+
     common = admin_keys & suv_keys
     only_admin_keys = admin_keys - suv_keys
     only_suv_keys = suv_keys - admin_keys
@@ -670,35 +675,44 @@ def reconcile(
         s_rows = suv_idx[key]
 
         if len(a_rows) != 1 or len(s_rows) != 1:
-            duplicate_key_conflicts.append(
-                {
-                    "key": key,
-                    "admin_count": len(a_rows),
-                    "suvidha_count": len(s_rows),
-                }
-            )
+            duplicate_key_conflicts.append({
+                "key": key,
+                "admin_count": len(a_rows),
+                "suvidha_count": len(s_rows),
+            })
 
-        a = a_rows[0]
-        s = s_rows[0]
+        # 🔥 pick first but keep index
+        a_index, a = a_rows[0]
+        s_index, s = s_rows[0]
+
         diffs = {}
+
         for ac, sc, confidence in col_pairs:
             av = canonical_text(a.get(ac, ""))
             sv = canonical_text(s.get(sc, ""))
+
             if av != sv:
                 diffs[ac] = {
                     "admin": av,
                     "suvidha": sv,
                     "suv_col": sc,
                     "confidence": round(confidence, 4),
+                    "col_index": admin_cols.index(ac),  # 🔥 CRITICAL FIX
                 }
 
         if diffs:
-            discrepancies.append({"key": key, "admin_row": a, "suv_row": s, "diffs": diffs})
+            discrepancies.append({
+                "key": key,
+                "row_index": a_index,   # 🔥 CRITICAL FIX
+                "admin_row": a,
+                "suv_row": s,
+                "diffs": diffs,
+            })
         else:
             matching_records += 1
 
-    only_admin_rows = [row for key in sorted(only_admin_keys) for row in admin_idx[key]]
-    only_suv_rows = [row for key in sorted(only_suv_keys) for row in suv_idx[key]]
+    only_admin_rows = [row for key in sorted(only_admin_keys) for _, row in admin_idx[key]]
+    only_suv_rows = [row for key in sorted(only_suv_keys) for _, row in suv_idx[key]]
 
     compared = len(common)
     total_keys = len(admin_keys | suv_keys)
@@ -707,7 +721,10 @@ def reconcile(
         "discrepancies": discrepancies,
         "only_admin_rows": only_admin_rows,
         "only_suv_rows": only_suv_rows,
-        "col_pairs": [{"admin_col": a, "suv_col": s, "confidence": round(c, 4)} for a, s, c in col_pairs],
+        "col_pairs": [
+            {"admin_col": a, "suv_col": s, "confidence": round(c, 4)}
+            for a, s, c in col_pairs
+        ],
         "admin_key": admin_key,
         "suv_key": suv_key,
         "admin_cols": admin_cols,
@@ -717,7 +734,9 @@ def reconcile(
             "duplicate_key_conflicts": duplicate_key_conflicts,
             "admin_missing_keys": admin_missing_keys,
             "suvidha_missing_keys": suv_missing_keys,
-            "unmapped_admin_cols": [c for c in admin_cols if c != admin_key and c not in pair_lookup],
+            "unmapped_admin_cols": [
+                c for c in admin_cols if c != admin_key and c not in pair_lookup
+            ],
         },
         "stats": {
             "total": total_keys,
@@ -742,6 +761,37 @@ def _style_cell(cell, *, fill_hex: str | None = None, bold: bool = False, color:
     cell.border = _border()
 
 
+def highlight_excel_fast(original_file, result):
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font
+
+    wb = load_workbook(original_file, read_only=False)
+    ws = wb.active
+
+    # Pre-create font (IMPORTANT optimization)
+    red_font = Font(color="FF0000", bold=True)
+
+    # Build quick lookup
+    diff_lookup = {
+        d["row_index"]: d["diffs"]
+        for d in result["discrepancies"]
+    }
+
+    for row_idx, diffs in diff_lookup.items():
+        excel_row = row_idx + 2  # +1 for header +1 for 1-based index
+
+        for col_name, diff in diffs.items():
+            col_index = diff["col_index"] + 1  # 1-based
+
+            cell = ws.cell(row=excel_row, column=col_index)
+            cell.font = red_font  # ONLY apply where needed
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
 def _write_sheet_table(ws, headers: list[str], rows: list[dict[str, Any]], header_fill: str = "1F4E78") -> None:
     for c, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=c, value=h)
@@ -759,87 +809,55 @@ def _write_sheet_table(ws, headers: list[str], rows: list[dict[str, Any]], heade
         ws.column_dimensions[get_column_letter(idx)].width = width
 
 
-def build_xlsx(result: dict[str, Any]) -> io.BytesIO:
-    wb = Workbook()
+def build_xlsx(result, original_admin_file):
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font
 
+    # Load ORIGINAL file (preserve format)
+    wb = load_workbook(original_admin_file)
     ws = wb.active
-    ws.title = "Summary"
 
-    ws["A1"] = "Grambook Reconciliation Report"
-    _style_cell(ws["A1"], fill_hex="0F4C81", bold=True, color="FFFFFF")
-    ws.merge_cells("A1:D1")
-    ws["A2"] = f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    ws["A3"] = f"Admin key: {result['admin_key']}"
-    ws["A4"] = f"Suvidha key: {result['suv_key']}"
+    # Create lookup for discrepancies
+    diff_map = {}
+    for d in result["discrepancies"]:
+        key = d["key"]
+        diff_map[key] = d["diffs"]
 
-    stats_rows = [
-        {"Metric": "Total Keys", "Value": result["stats"]["total"]},
-        {"Metric": "Matching", "Value": result["stats"]["matched"]},
-        {"Metric": "Discrepancies", "Value": result["stats"]["disc"]},
-        {"Metric": "Only in Admin", "Value": result["stats"]["only_a"]},
-        {"Metric": "Only in Suvidha", "Value": result["stats"]["only_s"]},
-        {"Metric": "Admin Missing Keys", "Value": result.get("meta", {}).get("admin_missing_keys", 0)},
-        {"Metric": "Suvidha Missing Keys", "Value": result.get("meta", {}).get("suvidha_missing_keys", 0)},
-    ]
+    # Find header row (assume already detected earlier)
+    header_row = 1
+    headers = [cell.value for cell in ws[header_row]]
 
-    start_row = 6
-    for c, h in enumerate(["Metric", "Value"], 1):
-        cell = ws.cell(row=start_row, column=c, value=h)
-        _style_cell(cell, fill_hex="1F4E78", bold=True, color="FFFFFF", align="center")
+    # Find key column index
+    key_col_idx = None
+    for i, h in enumerate(headers):
+        if str(h).strip().lower() == result["admin_key"]:
+            key_col_idx = i
+            break
 
-    for i, row in enumerate(stats_rows, start_row + 1):
-        ws.cell(row=i, column=1, value=row["Metric"])
-        ws.cell(row=i, column=2, value=row["Value"])
-        _style_cell(ws.cell(row=i, column=1))
-        _style_cell(ws.cell(row=i, column=2), align="center")
+    if key_col_idx is None:
+        raise Exception("Key column not found in Excel")
 
-    ws.column_dimensions["A"].width = 30
-    ws.column_dimensions["B"].width = 14
+    # Iterate rows
+    for row in ws.iter_rows(min_row=header_row + 1):
+        key_val = str(row[key_col_idx].value).strip()
 
-    ws_d = wb.create_sheet("Discrepancies")
-    cols = [result["admin_key"]] + [c for c in result["admin_cols"] if c != result["admin_key"]]
-    header = ["source"] + cols
-    for c, h in enumerate(header, 1):
-        cell = ws_d.cell(row=1, column=c, value=h)
-        _style_cell(cell, fill_hex="B23B3B", bold=True, color="FFFFFF", align="center")
+        if key_val in diff_map:
+            diffs = diff_map[key_val]
 
-    r = 2
-    for disc in result["discrepancies"]:
-        diff_cols = set(disc["diffs"].keys())
+            for i, cell in enumerate(row):
+                col_name = headers[i]
 
-        ws_d.cell(row=r, column=1, value="Admin")
-        _style_cell(ws_d.cell(row=r, column=1), fill_hex="FCE8E6", bold=True)
-        for idx, col in enumerate(cols, start=2):
-            val = disc["admin_row"].get(col, "")
-            cell = ws_d.cell(row=r, column=idx, value=val)
-            if col in diff_cols:
-                _style_cell(cell, fill_hex="F8B4B4", bold=True)
-            else:
-                _style_cell(cell)
+                if col_name in diffs:
+                    # 🔴 Highlight mismatched
+                    cell.font = Font(color="FF0000", bold=True)
+                else:
+                    # ⚫ Keep matched normal
+                    cell.font = Font(color="000000")
 
-        r += 1
-        ws_d.cell(row=r, column=1, value="Suvidha")
-        _style_cell(ws_d.cell(row=r, column=1), fill_hex="E8F8F0", bold=True)
-        for idx, col in enumerate(cols, start=2):
-            mapped_col = disc["diffs"].get(col, {}).get("suv_col", col)
-            val = disc["suv_row"].get(mapped_col, disc["suv_row"].get(col, ""))
-            cell = ws_d.cell(row=r, column=idx, value=val)
-            if col in diff_cols:
-                _style_cell(cell, fill_hex="B8F0D8", bold=True)
-            else:
-                _style_cell(cell)
-
-        r += 1
-
-    for idx, h in enumerate(header, 1):
-        sample_vals = [str(h)] + [str(ws_d.cell(row=x, column=idx).value or "") for x in range(2, min(r, 2000))]
-        ws_d.column_dimensions[get_column_letter(idx)].width = min(max(len(v) for v in sample_vals) + 3, 45)
-
-    ws_oa = wb.create_sheet("Only in Admin")
-    _write_sheet_table(ws_oa, result["admin_cols"], result["only_admin_rows"], header_fill="D45757")
-
-    ws_os = wb.create_sheet("Only in Suvidha")
-    _write_sheet_table(ws_os, result["suv_cols"], result["only_suv_rows"], header_fill="2F9E74")
+        else:
+            # Row not in discrepancies → keep normal
+            for cell in row:
+                cell.font = Font(color="000000")
 
     buf = io.BytesIO()
     wb.save(buf)
