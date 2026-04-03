@@ -810,58 +810,65 @@ def _write_sheet_table(ws, headers: list[str], rows: list[dict[str, Any]], heade
 
 
 def build_xlsx(result, original_admin_file):
-    from openpyxl import load_workbook
-    from openpyxl.styles import Font
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
 
-    # Seek to beginning if it's a file-like object
-    if hasattr(original_admin_file, 'seek'):
-        original_admin_file.seek(0)
-
-    # Load ORIGINAL file (preserve format)
-    wb = load_workbook(original_admin_file)
+    wb = Workbook()
     ws = wb.active
+    ws.title = "Reconciliation"
 
-    # Create lookup for discrepancies
-    diff_map = {}
-    for d in result["discrepancies"]:
-        key = d["key"]
-        diff_map[key] = d["diffs"]
+    # Title
+    ws['A1'] = "Grambook Reconciliation Report"
+    ws['A1'].font = Font(bold=True, size=14)
+    ws['A2'] = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    ws['A2'].font = Font(italic=True, size=9)
 
-    # Find header row (assume already detected earlier)
-    header_row = 1
-    headers = [cell.value for cell in ws[header_row]]
+    # Summary
+    ws['A4'] = "Summary"
+    ws['A4'].font = Font(bold=True, size=12)
+    
+    stats = result["stats"]
+    row = 5
+    ws[f'A{row}'] = "Total Records"
+    ws[f'B{row}'] = stats.get("total", 0)
+    row += 1
+    ws[f'A{row}'] = "Matched"
+    ws[f'B{row}'] = stats.get("matched", 0)
+    row += 1
+    ws[f'A{row}'] = "Discrepancies"
+    ws[f'B{row}'] = stats.get("disc", 0)
+    row += 1
+    ws[f'A{row}'] = "Only in Admin"
+    ws[f'B{row}'] = stats.get("only_a", 0)
+    row += 1
+    ws[f'A{row}'] = "Only in Suvidha"
+    ws[f'B{row}'] = stats.get("only_s", 0)
 
-    # Find key column index
-    key_col_idx = None
-    for i, h in enumerate(headers):
-        if str(h).strip().lower() == result["admin_key"]:
-            key_col_idx = i
-            break
+    # Discrepancies section
+    if result["discrepancies"]:
+        row += 2
+        ws[f'A{row}'] = "Discrepancies"
+        ws[f'A{row}'].font = Font(bold=True, size=11)
+        
+        row += 1
+        admin_cols = result["admin_cols"]
+        for col_idx, col in enumerate(admin_cols, 1):
+            cell = ws.cell(row=row, column=col_idx, value=col)
+            cell.fill = PatternFill(start_color="FFE6E6", end_color="FFE6E6", fill_type="solid")
+            cell.font = Font(bold=True)
 
-    if key_col_idx is None:
-        raise Exception("Key column not found in Excel")
+        for disc in result["discrepancies"]:
+            row += 1
+            for col_idx, col in enumerate(admin_cols, 1):
+                val = disc["admin_row"].get(col, "")
+                cell = ws.cell(row=row, column=col_idx, value=val)
+                if col in disc["diffs"]:
+                    cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+                    cell.font = Font(color="FFFFFF", bold=True)
 
-    # Iterate rows
-    for row in ws.iter_rows(min_row=header_row + 1):
-        key_val = str(row[key_col_idx].value).strip()
-
-        if key_val in diff_map:
-            diffs = diff_map[key_val]
-
-            for i, cell in enumerate(row):
-                col_name = headers[i]
-
-                if col_name in diffs:
-                    # 🔴 Highlight mismatched
-                    cell.font = Font(color="FF0000", bold=True)
-                else:
-                    # ⚫ Keep matched normal
-                    cell.font = Font(color="000000")
-
-        else:
-            # Row not in discrepancies → keep normal
-            for cell in row:
-                cell.font = Font(color="000000")
+    # Set column widths
+    for col in range(1, len(result["admin_cols"]) + 1):
+        ws.column_dimensions[chr(64 + col if col <= 26 else 64 + (col // 26) + chr(64 + (col % 26)))].width = 20
 
     buf = io.BytesIO()
     wb.save(buf)
