@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+bin/
+build/
+develop-eggs/
+dist/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments (DO NOT commit these)
+.venv/
+venv/
+ENV/
+env/
+python_venv/
+
+# Environment variables and secrets
+.env
+.venv
+env.bak
+.secret
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nosetests
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.pytest_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# IDE Specific (optional, but recommended)
+.vscode/
+.idea/
+*.swp
+*.swo

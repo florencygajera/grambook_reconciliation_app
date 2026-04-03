@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Grambook Reconciliation</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg:       #0d0f14;
+  --surface:  #13161e;
+  --card:     #1a1e2a;
+  --border:   #252b3b;
+  --accent:   #4f8ef7;
+  --accent2:  #38d9a9;
+  --warn:     #ff7043;
+  --text:     #e8eaf0;
+  --muted:    #7b859e;
+  --adm:      #ff8a65;
+  --suv:      #4dd0a4;
+  --oa:       #ef5350;
+  --os:       #26c6da;
+  --ok:       #66bb6a;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;}
+body::before{content:'';position:fixed;inset:0;z-index:0;background-image:linear-gradient(rgba(79,142,247,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(79,142,247,.04) 1px,transparent 1px);background-size:48px 48px;pointer-events:none;}
+.wrap{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:0 24px 80px;}
+
+/* HEADER */
+header{display:flex;align-items:center;gap:16px;padding:36px 0 40px;border-bottom:1px solid var(--border);margin-bottom:48px;}
+.logo{width:46px;height:46px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:12px;display:grid;place-items:center;font-size:22px;flex-shrink:0;box-shadow:0 0 24px rgba(79,142,247,.35);}
+header h1{font-size:1.5rem;font-weight:700;letter-spacing:-.025em;}
+header h1 span{color:var(--accent);}
+header p{font-size:.78rem;color:var(--muted);margin-top:4px;font-weight:300;}
+
+/* UPLOAD GRID */
+.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px;}
+@media(max-width:620px){.upload-grid{grid-template-columns:1fr;}}
+
+.upload-card{background:var(--card);border:1.5px dashed var(--border);border-radius:16px;padding:28px 24px;cursor:pointer;transition:border-color .2s,background .2s;position:relative;overflow:hidden;}
+.upload-card::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at 80% 20%,rgba(79,142,247,.04),transparent 60%);pointer-events:none;}
+.upload-card:hover,.upload-card.dragover{border-color:var(--accent);background:rgba(79,142,247,.05);}
+.upload-card.ready{border-style:solid;border-color:var(--accent2);background:rgba(56,217,169,.04);}
+.upload-card input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:0;}
+.uc-tag{display:inline-flex;align-items:center;gap:6px;font-size:.67rem;font-family:'DM Mono',monospace;letter-spacing:.09em;text-transform:uppercase;margin-bottom:14px;padding:4px 10px;border-radius:20px;background:var(--surface);}
+.uc-tag.adm{color:var(--adm);}
+.uc-tag.suv{color:var(--suv);}
+.uc-icon{font-size:2.2rem;margin-bottom:12px;display:block;}
+.upload-card h3{font-size:.95rem;font-weight:600;margin-bottom:5px;}
+.upload-card .hint{font-size:.74rem;color:var(--muted);}
+.file-ready{display:none;margin-top:14px;align-items:center;gap:8px;font-size:.78rem;color:var(--accent2);font-family:'DM Mono',monospace;}
+.file-ready .icon{font-size:1rem;}
+.upload-card.ready .file-ready{display:flex;}
+.upload-card.ready .placeholder{display:none;}
+
+/* MAPPING PANEL */
+.map-panel{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:28px;margin-bottom:24px;display:none;}
+.map-panel.show{display:block;animation:fadeIn .3s ease;}
+.map-panel h2{font-size:.95rem;font-weight:600;margin-bottom:5px;}
+.map-panel p{font-size:.75rem;color:var(--muted);margin-bottom:22px;}
+.map-row{display:grid;grid-template-columns:1fr 44px 1fr;align-items:end;gap:12px;}
+.map-field label{display:block;font-size:.68rem;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:7px;}
+.map-field label.adm{color:var(--adm);}
+.map-field label.suv{color:var(--suv);}
+.map-field select{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:10px 13px;color:var(--text);font-family:'DM Mono',monospace;font-size:.78rem;outline:none;cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%237b859e' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;}
+.map-field select:focus{border-color:var(--accent);}
+.map-arrow{text-align:center;color:var(--muted);font-size:1.2rem;padding-bottom:10px;}
+
+/* SUBMIT */
+.btn-wrap{display:flex;justify-content:center;margin-bottom:40px;}
+.btn-submit{background:linear-gradient(135deg,var(--accent),#3a6ee8);border:none;border-radius:12px;padding:14px 52px;font-size:1rem;font-weight:600;color:#fff;cursor:pointer;font-family:'Sora',sans-serif;letter-spacing:-.01em;transition:opacity .2s,transform .15s,box-shadow .2s;box-shadow:0 4px 24px rgba(79,142,247,.4);display:flex;align-items:center;gap:10px;}
+.btn-submit:hover:not(:disabled){opacity:.9;transform:translateY(-2px);box-shadow:0 8px 32px rgba(79,142,247,.5);}
+.btn-submit:disabled{opacity:.38;cursor:not-allowed;transform:none;}
+
+/* STATS */
+.stats-bar{display:none;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:36px;}
+.stats-bar.show{display:grid;}
+@media(max-width:700px){.stats-bar{grid-template-columns:repeat(2,1fr);}}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px 16px;text-align:center;}
+.stat .num{font-size:2rem;font-weight:700;font-family:'DM Mono',monospace;}
+.stat .lbl{font-size:.67rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:5px;}
+.stat.ok .num{color:var(--ok);}
+.stat.disc .num{color:var(--warn);}
+.stat.oa .num{color:var(--oa);}
+.stat.os .num{color:var(--os);}
+
+/* ERROR BANNER */
+.err-banner{background:rgba(239,83,80,.12);border:1px solid var(--oa);border-radius:10px;padding:12px 18px;font-size:.82rem;color:var(--oa);margin-bottom:20px;display:none;}
+.err-banner.show{display:block;}
+
+/* RESULTS */
+#results{display:none;}
+#results.show{display:block;animation:fadeIn .4s ease;}
+
+.section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px;}
+.section-head h2{font-size:1rem;font-weight:600;}
+.btn-dl{background:var(--surface);border:1px solid var(--accent2);color:var(--accent2);border-radius:9px;padding:9px 20px;font-size:.8rem;font-weight:500;cursor:pointer;font-family:'Sora',sans-serif;display:flex;align-items:center;gap:8px;transition:background .18s;}
+.btn-dl:hover{background:rgba(56,217,169,.1);}
+.btn-dl:disabled{opacity:.4;cursor:not-allowed;}
+
+/* TABS */
+.tabs{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap;}
+.tab{padding:8px 18px;border-radius:8px;font-size:.8rem;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--muted);transition:all .15s;user-select:none;}
+.tab:hover{border-color:var(--accent);color:var(--text);}
+.tab .badge{display:inline-block;background:rgba(255,255,255,.18);border-radius:10px;padding:1px 7px;font-size:.68rem;margin-left:6px;}
+.tab.active{color:#fff;}
+.tab[data-tab=disc].active{background:var(--warn);border-color:var(--warn);}
+.tab[data-tab=oa].active{background:var(--oa);border-color:var(--oa);}
+.tab[data-tab=os].active{background:var(--os);border-color:var(--os);}
+
+/* TABLE */
+.tbl-outer{overflow-x:auto;border-radius:12px;border:1px solid var(--border);}
+table{width:100%;border-collapse:collapse;font-size:.77rem;}
+thead tr{background:var(--surface);}
+thead th{padding:11px 14px;text-align:left;font-family:'DM Mono',monospace;font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;position:sticky;top:0;background:var(--surface);}
+tbody tr{border-bottom:1px solid var(--border);transition:background .1s;}
+tbody tr:last-child{border-bottom:none;}
+td{padding:10px 14px;vertical-align:middle;}
+
+/* disc pair rows */
+tr.a-row td{background:rgba(255,138,101,.07);}
+tr.s-row td{background:rgba(77,208,164,.07);}
+tr.a-row td.diff{background:rgba(255,138,101,.28);color:var(--adm);font-weight:700;}
+tr.s-row td.diff{background:rgba(77,208,164,.25);color:var(--suv);font-weight:700;}
+tr.sep td{padding:2px;background:var(--bg);}
+
+.badge-src{display:inline-block;padding:2px 8px;border-radius:4px;font-family:'DM Mono',monospace;font-size:.64rem;font-weight:600;letter-spacing:.04em;}
+.badge-src.a{background:rgba(255,138,101,.18);color:var(--adm);}
+.badge-src.s{background:rgba(77,208,164,.18);color:var(--suv);}
+
+tr.oa-row td{background:rgba(239,83,80,.055);}
+tr.os-row td{background:rgba(38,198,218,.055);}
+
+.empty{padding:52px;text-align:center;color:var(--muted);font-size:.85rem;}
+.empty .ico{font-size:2.5rem;margin-bottom:12px;}
+
+/* SPINNER */
+.spin{display:inline-block;width:17px;height:17px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:rot .65s linear infinite;}
+@keyframes rot{to{transform:rotate(360deg);}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:none;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- HEADER -->
+<header>
+  <div class="logo">⚖️</div>
+  <div>
+    <h1>Grambook <span>Reconciliation</span></h1>
+    <p>Upload Admin &amp; Suvidha exports → instantly compare every field → download discrepancy report</p>
+  </div>
+</header>
+
+<!-- ERROR -->
+<div class="err-banner" id="errBanner"></div>
+
+<!-- UPLOAD -->
+<div class="upload-grid">
+  <div class="upload-card" id="adminCard">
+    <input type="file" id="adminFile" accept=".xlsx,.xls,.csv"/>
+    <div class="uc-tag adm">⬡ GrambookAdmin</div>
+    <div class="placeholder">
+      <span class="uc-icon">📋</span>
+      <h3>Admin Excel File</h3>
+      <p class="hint">Drop or click — .xlsx / .xls / .csv</p>
+    </div>
+    <div class="file-ready" id="adminReady"><span class="icon">✓</span><span id="adminFname"></span></div>
+  </div>
+
+  <div class="upload-card" id="suvidhaCard">
+    <input type="file" id="suvidhaFile" accept=".xlsx,.xls,.csv"/>
+    <div class="uc-tag suv">⬡ GrambookSuvidha</div>
+    <div class="placeholder">
+      <span class="uc-icon">🌐</span>
+      <h3>Suvidha Excel File</h3>
+      <p class="hint">Drop or click — .xlsx / .xls / .csv</p>
+    </div>
+    <div class="file-ready" id="suvidhaReady"><span class="icon">✓</span><span id="suvidhaFname"></span></div>
+  </div>
+</div>
+
+<!-- MAPPING -->
+<div class="map-panel" id="mapPanel">
+  <h2>🔗 Select the common ID column</h2>
+  <p>Pick the column in each file that uniquely identifies the same record (e.g. Property ID, Citizen Code, Transaction No).</p>
+  <div class="map-row">
+    <div class="map-field">
+      <label class="adm">Admin — key column</label>
+      <select id="adminKey"></select>
+    </div>
+    <div class="map-arrow">⇄</div>
+    <div class="map-field">
+      <label class="suv">Suvidha — key column</label>
+      <select id="suvidhaKey"></select>
+    </div>
+  </div>
+</div>
+
+<!-- SUBMIT -->
+<div class="btn-wrap">
+  <button class="btn-submit" id="submitBtn" disabled>
+    <span id="btnTxt">Compare Files</span>
+    <span id="btnIco">→</span>
+  </button>
+</div>
+
+<!-- STATS -->
+<div class="stats-bar" id="statsBar">
+  <div class="stat"><div class="num" id="sTotal">0</div><div class="lbl">Total Records</div></div>
+  <div class="stat ok"><div class="num" id="sMatch">0</div><div class="lbl">Matching</div></div>
+  <div class="stat disc"><div class="num" id="sDisc">0</div><div class="lbl">Discrepancies</div></div>
+  <div class="stat oa"><div class="num" id="sOA">0</div><div class="lbl">Only in Admin</div></div>
+  <div class="stat os"><div class="num" id="sOS">0</div><div class="lbl">Only in Suvidha</div></div>
+</div>
+
+<!-- RESULTS -->
+<div id="results">
+  <div class="section-head">
+    <h2>Comparison Results</h2>
+    <button class="btn-dl" id="dlBtn">⬇&nbsp; Download Report (.xlsx)</button>
+  </div>
+  <div class="tabs">
+    <div class="tab active" data-tab="disc">Discrepancies <span class="badge" id="tDisc">0</span></div>
+    <div class="tab" data-tab="oa">Only in Admin <span class="badge" id="tOA">0</span></div>
+    <div class="tab" data-tab="os">Only in Suvidha <span class="badge" id="tOS">0</span></div>
+  </div>
+  <div id="tabContent"></div>
+</div>
+
+</div><!-- /wrap -->
+
+<script>
+// ── state ──────────────────────────────────────────────────────────────────
+let adminFile   = null;
+let suvidhaFile = null;
+let lastResult  = null;
+let activeTab   = 'disc';
+let fetching    = false;
+
+// ── file pickers ──────────────────────────────────────────────────────────
+function setupPicker(inputId, cardId, nameId, readyId, which) {
+  const input = document.getElementById(inputId);
+  const card  = document.getElementById(cardId);
+
+  input.addEventListener('change', () => {
+    const f = input.files[0]; if (!f) return;
+    if (which === 'admin') adminFile = f; else suvidhaFile = f;
+    document.getElementById(nameId).textContent = f.name;
+    card.classList.add('ready');
+    checkBothUploaded();
+  });
+
+  card.addEventListener('dragover', e => { e.preventDefault(); card.classList.add('dragover'); });
+  card.addEventListener('dragleave', () => card.classList.remove('dragover'));
+  card.addEventListener('drop', e => {
+    e.preventDefault(); card.classList.remove('dragover');
+    const f = e.dataTransfer.files[0]; if (!f) return;
+    const dt = new DataTransfer(); dt.items.add(f); input.files = dt.files;
+    input.dispatchEvent(new Event('change'));
+  });
+}
+
+setupPicker('adminFile',   'adminCard',   'adminFname',   'adminReady',   'admin');
+setupPicker('suvidhaFile', 'suvidhaCard', 'suvidhaFname', 'suvidhaReady', 'suvidha');
+
+function checkBothUploaded() {
+  if (!adminFile || !suvidhaFile) return;
+  // ask backend for column lists
+  const fd = new FormData();
+  fd.append('admin_file',   adminFile);
+  fd.append('suvidha_file', suvidhaFile);
+
+  fetch('/api/columns', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { showErr(data.error); return; }
+      populateSel('adminKey',   data.admin_cols,  ['id','no','num','code','ref','adm']);
+      populateSel('suvidhaKey', data.suv_cols,    ['admin','id','no','num','code','ref']);
+      document.getElementById('mapPanel').classList.add('show');
+      document.getElementById('submitBtn').disabled = false;
+    })
+    .catch(e => showErr('Could not read columns: ' + e));
+}
+
+function populateSel(selId, cols, pref) {
+  const sel = document.getElementById(selId);
+  sel.innerHTML = cols.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  const guess = cols.find(c => pref.some(p => c.toLowerCase().includes(p))) || cols[0];
+  if (guess) sel.value = guess;
+}
+
+// ── submit ─────────────────────────────────────────────────────────────────
+document.getElementById('submitBtn').addEventListener('click', () => {
+  if (fetching) return;
+  clearErr();
+  setBusy(true);
+
+  const fd = new FormData();
+  fd.append('admin_file',   adminFile);
+  fd.append('suvidha_file', suvidhaFile);
+  fd.append('admin_key',    document.getElementById('adminKey').value);
+  fd.append('suv_key',      document.getElementById('suvidhaKey').value);
+
+  fetch('/api/reconcile', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+      setBusy(false);
+      if (data.error) { showErr(data.error); return; }
+      lastResult = data;
+      renderStats(data.stats);
+      activeTab = 'disc';
+      setTab('disc');
+      renderTab(data, 'disc');
+      document.getElementById('results').classList.add('show');
+    })
+    .catch(e => { setBusy(false); showErr('Request failed: ' + e); });
+});
+
+// ── download ──────────────────────────────────────────────────────────────
+document.getElementById('dlBtn').addEventListener('click', () => {
+  if (!adminFile || !suvidhaFile) return;
+  const dl = document.getElementById('dlBtn');
+  dl.disabled = true;
+  dl.textContent = 'Generating…';
+
+  const fd = new FormData();
+  fd.append('admin_file',   adminFile);
+  fd.append('suvidha_file', suvidhaFile);
+  fd.append('admin_key',    document.getElementById('adminKey').value);
+  fd.append('suv_key',      document.getElementById('suvidhaKey').value);
+
+  fetch('/api/download', { method: 'POST', body: fd })
+    .then(r => {
+      if (!r.ok) return r.json().then(d => { throw new Error(d.error); });
+      return r.blob();
+    })
+    .then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a   = document.createElement('a');
+      const ts  = new Date().toISOString().slice(0,10);
+      a.href = url; a.download = `grambook_reconciliation_${ts}.xlsx`;
+      a.click(); URL.revokeObjectURL(url);
+      dl.disabled = false;
+      dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
+    })
+    .catch(e => {
+      showErr(e.message);
+      dl.disabled = false;
+      dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
+    });
+});
+
+// ── tabs ──────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t =>
+  t.addEventListener('click', () => {
+    if (!lastResult) return;
+    setTab(t.dataset.tab);
+    renderTab(lastResult, t.dataset.tab);
+  })
+);
+
+function setTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.tab === tab)
+  );
+}
+
+// ── render stats ──────────────────────────────────────────────────────────
+function renderStats(s) {
+  document.getElementById('sTotal').textContent = s.total;
+  document.getElementById('sMatch').textContent = s.matched;
+  document.getElementById('sDisc').textContent  = s.disc;
+  document.getElementById('sOA').textContent    = s.only_a;
+  document.getElementById('sOS').textContent    = s.only_s;
+  document.getElementById('tDisc').textContent  = s.disc;
+  document.getElementById('tOA').textContent    = s.only_a;
+  document.getElementById('tOS').textContent    = s.only_s;
+  document.getElementById('statsBar').classList.add('show');
+}
+
+// ── render tab content ────────────────────────────────────────────────────
+function renderTab(r, tab) {
+  const c = document.getElementById('tabContent');
+  c.innerHTML = '';
+  if (tab === 'disc') c.innerHTML = renderDisc(r);
+  if (tab === 'oa')   c.innerHTML = renderOnly(r.only_admin_rows, r.admin_cols, 'oa-row');
+  if (tab === 'os')   c.innerHTML = renderOnly(r.only_suv_rows,   r.suv_cols,   'os-row');
+}
+
+function renderDisc(r) {
+  if (!r.discrepancies.length)
+    return `<div class="empty"><div class="ico">✅</div>All matched records are identical.</div>`;
+
+  const displayCols = [r.admin_key, ...r.admin_cols.filter(c => c !== r.admin_key)];
+  let h = `<div class="tbl-outer"><table><thead><tr>
+    <th>Source</th>${displayCols.map(c=>`<th>${esc(c)}</th>`).join('')}
+  </tr></thead><tbody>`;
+
+  r.discrepancies.forEach(entry => {
+    const diffSet = new Set(Object.keys(entry.diffs));
+
+    // Admin row
+    h += `<tr class="a-row"><td><span class="badge-src a">Admin</span></td>`;
+    displayCols.forEach(c => {
+      const v = esc(String(entry.admin_row[c] ?? ''));
+      h += `<td class="${diffSet.has(c)?'diff':''}">${v}</td>`;
+    });
+    h += `</tr>`;
+
+    // Suvidha row
+    h += `<tr class="s-row"><td><span class="badge-src s">Suvidha</span></td>`;
+    displayCols.forEach(c => {
+      const v = diffSet.has(c)
+        ? esc(entry.diffs[c].suvidha)
+        : esc(String(entry.suv_row[entry.diffs[c]?.suv_col ?? c] ?? entry.suv_row[c] ?? ''));
+      h += `<td class="${diffSet.has(c)?'diff':''}">${v}</td>`;
+    });
+    h += `</tr>`;
+
+    h += `<tr class="sep"><td colspan="${displayCols.length+1}"></td></tr>`;
+  });
+
+  return h + '</tbody></table></div>';
+}
+
+function renderOnly(rows, cols, rowCls) {
+  if (!rows || !rows.length)
+    return `<div class="empty"><div class="ico">✅</div>No exclusive records found.</div>`;
+  let h = `<div class="tbl-outer"><table><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>`;
+  rows.forEach(row => {
+    h += `<tr class="${rowCls}">${cols.map(c=>`<td>${esc(String(row[c]??''))}</td>`).join('')}</tr>`;
+  });
+  return h + '</tbody></table></div>';
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function setBusy(on) {
+  fetching = on;
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = on;
+  document.getElementById('btnTxt').textContent = on ? 'Comparing…' : 'Compare Files';
+  document.getElementById('btnIco').innerHTML   = on ? '<span class="spin"></span>' : '→';
+}
+
+function showErr(msg) {
+  const b = document.getElementById('errBanner');
+  b.textContent = '⚠  ' + msg;
+  b.classList.add('show');
+}
+function clearErr() {
+  document.getElementById('errBanner').classList.remove('show');
+}
+</script>
+</body>
+</html>
