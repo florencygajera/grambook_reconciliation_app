@@ -308,10 +308,49 @@ def _parse_dataframe_from_upload(file_storage):
 
 def read_file(file_storage):
     df = _parse_dataframe_from_upload(file_storage)
-    df.columns = [canonical_text(c) for c in df.columns]
-    df = df.apply(lambda col: col.map(canonical_text))
-    return df.to_dict(orient="records"), list(df.columns)
 
+    # 🔥 STEP 1: Remove fully empty rows
+    df = df.dropna(how="all")
+
+    # 🔥 STEP 2: Detect actual header row (VERY IMPORTANT)
+    header_row_index = None
+
+    for i in range(min(15, len(df))):
+        row = df.iloc[i]
+
+        # Condition: row has multiple meaningful values (likely header)
+        non_empty = row.astype(str).str.strip().replace("", None).dropna()
+
+        if len(non_empty) >= 3:
+            header_row_index = i
+            break
+
+    if header_row_index is None:
+        raise Exception("❌ Could not detect header row. File structure too messy.")
+
+    # 🔥 STEP 3: Set header
+    df.columns = df.iloc[header_row_index]
+    df = df[header_row_index + 1:]
+
+    # 🔥 STEP 4: Clean column names
+    new_cols = []
+    for i, col in enumerate(df.columns):
+        col = canonical_text(col)
+
+        if not col or col.lower().startswith("unnamed"):
+            col = f"column_{i}"
+
+        new_cols.append(col)
+
+    df.columns = new_cols
+
+    # 🔥 STEP 5: Clean data
+    df = df.apply(lambda col: col.map(canonical_text))
+
+    # 🔥 STEP 6: Drop garbage rows again
+    df = df[df.apply(lambda row: any(str(v).strip() for v in row), axis=1)]
+
+    return df.to_dict(orient="records"), list(df.columns)
 
 def reconcile(admin_rows, admin_cols, suv_rows, suv_cols, admin_key, suv_key):
     admin_idx = {}
