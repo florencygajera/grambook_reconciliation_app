@@ -813,6 +813,10 @@ def build_xlsx(result, original_admin_file):
     from openpyxl import load_workbook
     from openpyxl.styles import Font
 
+    # Seek to beginning if it's a file-like object
+    if hasattr(original_admin_file, 'seek'):
+        original_admin_file.seek(0)
+
     # Load ORIGINAL file (preserve format)
     wb = load_workbook(original_admin_file)
     ws = wb.active
@@ -1032,7 +1036,7 @@ def download():
         suv_key = _resolve_key_column(suv_key_raw, suv.columns)
 
         result = reconcile(admin.rows, admin.columns, suv.rows, suv.columns, admin_key, suv_key)
-        buf = build_xlsx(result)
+        buf = build_xlsx(result, admin_file)
 
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
