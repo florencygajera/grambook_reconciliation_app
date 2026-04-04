@@ -166,25 +166,6 @@ _configure_tesseract()
 # ──────────────────────────────────────────────────────────────────────────────
 # Text normalisation helpers
 # ──────────────────────────────────────────────────────────────────────────────
-import re
-
-def excel_clean_text(text):
-    if not text:
-        return ""
-    
-    text = str(text)
-
-    # 🔥 Remove new lines (main fix)
-    text = text.replace("\n", " ").replace("\r", " ")
-
-    # 🔥 Remove numbering like 1. 2. 3. (optional but recommended)
-    text = re.sub(r"\d+\.", "", text)
-
-    # 🔥 Normalize spaces
-    text = " ".join(text.split())
-
-    return text
-
 def canonical_text(value: Any) -> str:
     text = "" if value is None else str(value)
     text = re.sub(r"[\r\n]+", " ", text)
@@ -965,125 +946,75 @@ def generate_discrepancy_report(
     admin: ParsedDataset,
     result: dict,
 ) -> io.BytesIO:
-
     wb = Workbook()
     ws = wb.active
     ws.title = "Discrepancies"
 
-    # 🔥 REMOVE KEY COLUMN FROM DATA COLUMNS
-    filtered_columns = [
-        col for col in admin.columns
-        if col != admin.key_column   # 👈 IMPORTANT
-    ]
+    position_map = admin.column_position_map
+    if not position_map:
+        raise ReconciliationError("Missing admin column position map for Excel output.")
 
-    new_col_map = {
-        col: idx + 2
-        for idx, col in enumerate(filtered_columns)
-    }
-
-   # 🔥 Ensure correct semantic placement
-    if col_name.lower() not in ["નંબર", "ઘરવેરો બાકી", "amount", "tax"]:
-    continue:
-    
-
-    # ================= HEADER =================
-    ws.cell(row=1, column=1, value="Name")
-
-    for col, col_idx in new_col_map.items():
-        cell = ws.cell(row=1, column=col_idx, value=excel_clean_text(col))
-        _style_cell(
-            cell,
-            fill_hex="1F4E78",
-            bold=True,
-            color="FFFFFF",
-            align="center",
-            wrap=False  # 🔥 FIXED
-        )
+    header_fill = "1F4E78"
+    for col_name in admin.columns:
+        col_pos = position_map.get(col_name)
+        if not col_pos:
+            continue
+        excel_col = int(col_pos["excel_col"])
+        cell = ws.cell(row=1, column=excel_col, value=excel_safe_text(col_name))
+        _style_cell(cell, fill_hex=header_fill, bold=True, color="FFFFFF", align="center", wrap=True)
 
     red_font = Font(color="FF0000", bold=True, name="Calibri", size=10)
-
     current_row = 2
 
-    # ================= DATA =================
     for disc in result.get("discrepancies", []):
-        key = disc["key"]
+        key = disc.get("key", "")
         diffs = disc.get("diffs", {})
 
-        # 🔴 Admin row
-        ws.cell(row=current_row, column=1, value=f"Admin - {excel_clean_text(key)}")
-
-        for col_name, diff in diffs.items():
-            col_idx = new_col_map.get(col_name)
-            if not col_idx:
+        ws.cell(row=current_row, column=1, value=f"Admin - {excel_safe_text(key)}")
+        _style_cell(ws.cell(row=current_row, column=1))
+        for diff_info in diffs.values():
+            excel_col = diff_info.get("excel_col")
+            if not excel_col:
                 continue
-
             cell = ws.cell(
                 row=current_row,
-                column=col_idx,
-                value=excel_clean_text(diff.get("admin", "")),  # 🔥 FIXED
+                column=int(excel_col),
+                value=excel_safe_text(diff_info.get("admin", "")),
             )
             cell.font = red_font
-
+            cell.border = _border()
         current_row += 1
 
-        # 🔴 Suvidha row
-        ws.cell(row=current_row, column=1, value=f"Suvidha - {excel_clean_text(key)}")
-
-        for col_name, diff in diffs.items():
-            col_idx = new_col_map.get(col_name)
-            if not col_idx:
+        ws.cell(row=current_row, column=1, value=f"Suvidha - {excel_safe_text(key)}")
+        _style_cell(ws.cell(row=current_row, column=1))
+        for diff_info in diffs.values():
+            excel_col = diff_info.get("excel_col")
+            if not excel_col:
                 continue
-
             cell = ws.cell(
                 row=current_row,
-                column=col_idx,
-                value=excel_clean_text(diff.get("suvidha", "")),  # 🔥 FIXED
+                column=int(excel_col),
+                value=excel_safe_text(diff_info.get("suvidha", "")),
             )
             cell.font = red_font
-
+            cell.border = _border()
         current_row += 1
 
-    # ================= ALIGNMENT =================
-    from openpyxl.styles import Alignment
-    from openpyxl.utils import get_column_letter
+    for col_name in admin.columns:
+        col_pos = position_map.get(col_name)
+        if not col_pos:
+            continue
+        excel_col = int(col_pos["excel_col"])
+        ws.column_dimensions[get_column_letter(excel_col)].width = min(
+            len(excel_safe_text(col_name)) + 10,
+            45,
+        )
 
-    for row in ws.iter_rows():
-        for cell in row:
-            cell.alignment = Alignment(
-                wrap_text=False,
-                vertical="center",
-                horizontal="left"
-            )
-
-    # ================= ROW HEIGHT =================
-    for r in range(1, ws.max_row + 1):
-        ws.row_dimensions[r].height = 20
-
-    # ================= COLUMN WIDTH =================
-    ws.column_dimensions["A"].width = 45  # Name column
-
-    for col_idx in range(2, len(admin.columns) + 2):  # 🔥 FIXED (start from 2)
-        col_letter = get_column_letter(col_idx)
-        ws.column_dimensions[col_letter].width = 35
-
-    # ================= SAVE =================
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
 
-def strict_column_match(admin_cols, suv_cols):
-    mapping = {}
-
-    for ac in admin_cols:
-        for sc in suv_cols:
-            if normalize_key(ac) == normalize_key(sc):
-                mapping[ac] = sc
-                break
-
-    return mapping
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Flask routes
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1274,4 +1205,6 @@ if __name__ == "__main__":
     print("\nGrambook Reconciliation Tool")
     print("http://localhost:5000\n")
     app.run(debug=True, port=5000)
+
+
 
