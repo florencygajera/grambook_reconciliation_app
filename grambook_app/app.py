@@ -46,6 +46,10 @@ except ImportError:
 
 app = Flask(__name__, static_folder="static")
 
+# FIX (High): Set a 50 MB upload cap to prevent memory exhaustion / DoS.
+# Adjust the value to whatever your server can safely handle.
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+
 
 class ReconciliationError(Exception):
     pass
@@ -166,6 +170,13 @@ _configure_tesseract()
 # ──────────────────────────────────────────────────────────────────────────────
 # Text normalisation helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
+# FIX (Critical): ZERO_WIDTH_RE must be defined BEFORE canonical_text() so that
+# any future module-level call to canonical_text() cannot hit a NameError.
+EXCEL_ILLEGAL_CHARS_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
+ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200D\uFEFF]")
+
+
 def canonical_text(value: Any) -> str:
     text = "" if value is None else str(value)
     text = re.sub(r"[\r\n]+", " ", text)
@@ -174,10 +185,6 @@ def canonical_text(value: Any) -> str:
     text = ZERO_WIDTH_RE.sub("", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
-
-
-EXCEL_ILLEGAL_CHARS_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
-ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200D\uFEFF]")
 
 
 def excel_safe_text(value: Any) -> str:
@@ -212,15 +219,18 @@ def canonical_compare_value(value: Any) -> str:
     return canonical_text(value)
 
 
+# FIX (Critical): Only ONE definition of normalize_key_value is kept.
+# The original had two definitions — the first (typed) at ~line 215 and a second
+# bare def at ~line 747. Python silently uses whichever is defined last, making
+# the first one dead code. Keeping only the correct, typed version here.
 def normalize_key_value(value: Any) -> str:
-    return canonical_text(value).lower()
+    return canonical_text(value).strip().lower()
 
 
 def _is_zero_or_blank(value: Any) -> bool:
     """
-    FIX — Zero/blank equivalence:
     Returns True for None, '', '0', '0.0', '0.00' and any zero-valued number.
-    These must all be treated as equivalent during reconciliation so that a cell
+    These are treated as equivalent during reconciliation so that a cell
     containing 0.0 in one file does not raise a false mismatch against an empty
     cell in the other file.
     """
@@ -234,7 +244,6 @@ def values_equivalent_for_compare(left: Any, right: Any) -> bool:
     # Both blank/zero → match (no false mismatch for 0.0 vs "")
     if _is_zero_or_blank(left) and _is_zero_or_blank(right):
         return True
-
     return canonical_compare_value(left) == canonical_compare_value(right)
 
 
@@ -337,8 +346,6 @@ def _parse_xlsx_matrix(file_bytes: bytes) -> tuple[list[list[str]], list[str]]:
             matrix[r - 1][c - 1] = canonical_text(ws.cell(row=r, column=c).value)
 
     # Forward-fill merged cells so category labels span all their sub-columns.
-    # This is essential for multi-header files like the Managana Register where
-    # "ઘરવેરો" sits in a merged cell above "બાકી", "ચાલુ", "કુલ".
     for mrange in ws.merged_cells.ranges:
         top_left = matrix[mrange.min_row - 1][mrange.min_col - 1]
         for rr in range(mrange.min_row - 1, mrange.max_row):
@@ -407,7 +414,6 @@ def _row_header_score(row: list[str]) -> float:
 
 def _is_sub_header_row(row: list[str]) -> bool:
     """
-    FIX — Multi-header detection:
     Detects that a row is a repeating sub-header row (e.g. બાકી ચાલુ કુલ cycling
     across many columns). Such a row should NOT be the header_start; the row above
     it (containing the category labels) is the real start, with span = 2.
@@ -416,11 +422,9 @@ def _is_sub_header_row(row: list[str]) -> bool:
     if len(non_empty) < 4:
         return False
     unique_vals = set(non_empty)
-    # High repetition = same sub-labels cycling across column groups
     repetition_ratio = 1.0 - len(unique_vals) / len(non_empty)
     if repetition_ratio < 0.40:
         return False
-    # All values must be short text labels, not numeric
     text_ratio = sum(1 for x in non_empty if not is_numeric_like(x)) / len(non_empty)
     return text_ratio >= 0.90
 
@@ -430,8 +434,7 @@ def detect_header_start(
 ) -> tuple[int, int | None]:
     """
     Returns (header_start_0indexed, forced_span_or_None).
-    forced_span is set to 2 when a multi-header layout is detected automatically
-    so that build_headers combines category + sub-label rows correctly.
+    forced_span is set to 2 when a multi-header layout is detected automatically.
     """
     if not matrix:
         raise ReconciliationError("File has no rows.")
@@ -464,9 +467,6 @@ def detect_header_start(
     scored.sort(key=lambda x: x[1], reverse=True)
     best_idx = scored[0][0]
 
-    # If the best row looks like a repeating sub-header (e.g. બાકી/ચાલુ/કુલ),
-    # check the row immediately before it: if that row contains category labels,
-    # step back to it and force span = 2 so both rows form the combined header.
     if _is_sub_header_row(matrix[best_idx]) and best_idx > 0:
         prev = matrix[best_idx - 1]
         prev_non_empty = [x for x in prev if x]
@@ -544,11 +544,8 @@ def build_headers(
     forced_span: int | None = None,
 ) -> tuple[list[str], dict[str, str], list[int], int]:
     """
-    FIX — Multi-header column naming:
     When span ≥ 2, each column name is built by joining ALL non-empty, non-duplicate
-    label parts from every header row (category row + sub-header row), producing
-    names like "ઘરવેરો બાકી", "ઘરવેરો ચાલુ", "ઘરવેરો કુલ" instead of just
-    "ઘરવેરો", "ઘરવેરો_2", "ઘરવેરો_3".
+    label parts from every header row (category row + sub-header row).
     """
     if not matrix:
         raise ReconciliationError("Empty matrix.")
@@ -559,7 +556,6 @@ def build_headers(
         row = (matrix[i] if i < len(matrix) else []) + [""] * max_cols
         local_rows.append(_forward_fill_header_cells(row[:max_cols]))
 
-    # Determine span: forced detection result > manual override > auto-score
     if forced_span is not None and manual_header_span is None:
         chosen_span = forced_span
     else:
@@ -595,7 +591,6 @@ def build_headers(
                 best_score = score
                 chosen_span = span
 
-    # Build raw header names: join category label + sub-label for each column
     header_rows = local_rows[:chosen_span]
     raw_headers: list[str] = []
     for c in range(max_cols):
@@ -603,7 +598,6 @@ def build_headers(
                                   if header_rows[r][c]])
         raw_headers.append(canonical_text(" ".join(parts)))
 
-    # Deduplicate display headers
     display_headers: list[str] = []
     normalized_map: dict[str, str] = {}
     drop_indices: list[int] = []
@@ -744,8 +738,6 @@ def parse_uploaded_dataset(
     parsed.parser_notes.extend(notes)
     return parsed
 
-def normalize_key_value(x):
-    return canonical_text(x).strip().lower()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Reconciliation
@@ -942,11 +934,9 @@ def _style_cell(
     cell.border = _border()
 
 
-# Columns that should never appear in the generated discrepancy report.
-# These are serial-number / row-number columns that carry no reconciliation value.
 _REPORT_EXCLUDE_SUBSTRINGS: list[str] = [
-    "ક્રમ",    # Gujarati: serial number
-    "નંબર",    # Gujarati: number
+    "ક્રમ",
+    "નંબર",
 ]
 _REPORT_EXCLUDE_NORM_KEYS: set[str] = {
     "no", "sr", "srno", "sno", "serialno", "number", "slno", "seq",
@@ -954,7 +944,6 @@ _REPORT_EXCLUDE_NORM_KEYS: set[str] = {
 
 
 def _is_report_excluded_column(col_name: str) -> bool:
-    """Return True for serial / sequence columns that must be dropped from the Excel report."""
     text = canonical_text(col_name)
     for sub in _REPORT_EXCLUDE_SUBSTRINGS:
         if sub in text:
@@ -972,61 +961,65 @@ def generate_discrepancy_report(
 
     Layout
     ------
-    • Column 1  : "Source" label  (Admin / Suvidha)
-    • Column 2+ : one column per *filtered* admin column (ક્રમ / નંબર excluded)
-
-    For every discrepancy pair the full row is written so that:
-      - names land in their actual column (e.g. કબજેદારનું નામ)
-      - numeric values land in their actual column (e.g. ઘરવેરો બાકી)
-      - mismatched cells are highlighted red-bold in BOTH the Admin and Suvidha rows
+    Sheet 1 — "Discrepancies"  : paired Admin/Suvidha rows for every mismatch
+    Sheet 2 — "Only in Admin"  : rows present only in the Admin file
+    Sheet 3 — "Only in Suvidha": rows present only in the Suvidha file
     """
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Discrepancies"
 
-    # ── 1. Build filtered column list ────────────────────────────────────────
+    # ── shared helpers ────────────────────────────────────────────────────────
+    HEADER_FILL       = "1F4E78"
+    ADMIN_BG          = "FFF3EE"
+    SUVIDHA_BG        = "F0FBF7"
+    ADMIN_SRC_FILL    = "FF8A65"
+    SUVIDHA_SRC_FILL  = "4DD0A4"
+    ONLY_ADMIN_FILL   = "EF9A9A"   # soft red  for "Only in Admin" header
+    ONLY_SUV_FILL     = "80DEEA"   # soft teal for "Only in Suvidha" header
+    SEP_FILL          = "E8EAF0"
+    red_font = Font(color="C0392B", bold=True, name="Calibri", size=10)
+
+    # ── 1. Build filtered column list ─────────────────────────────────────────
     filtered_cols: list[str] = [
         c for c in admin.columns if not _is_report_excluded_column(c)
     ]
     if not filtered_cols:
-        filtered_cols = admin.columns  # safety fallback
+        filtered_cols = admin.columns
 
-    # Sequential Excel column mapping:
-    #   col 1 → "Source" label
-    #   col 2 onwards → filtered data columns
     SOURCE_COL = 1
     col_to_excel: dict[str, int] = {c: i + 2 for i, c in enumerate(filtered_cols)}
 
-    # Suvidha column lookup: admin_col_name → suvidha_col_name
     suv_col_lookup: dict[str, str] = {
         p["admin_col"]: p["suv_col"]
         for p in result.get("col_pairs", [])
     }
 
-    # ── 2. Styles ────────────────────────────────────────────────────────────
-    HEADER_FILL   = "1F4E78"
-    ADMIN_BG      = "FFF3EE"   # very light orange tint for admin rows
-    SUVIDHA_BG    = "F0FBF7"   # very light teal tint for suvidha rows
-    ADMIN_SRC_FILL    = "FF8A65"
-    SUVIDHA_SRC_FILL  = "4DD0A4"
-    SEP_FILL      = "E8EAF0"
+    def _write_header_row(ws, cols: list[str], fill: str) -> None:
+        src_hdr = ws.cell(row=1, column=SOURCE_COL, value="Source")
+        _style_cell(src_hdr, fill_hex=fill, bold=True, color="FFFFFF", align="center")
+        ws.column_dimensions[get_column_letter(SOURCE_COL)].width = 10
+        for col_name, excel_col in {c: i + 2 for i, c in enumerate(cols)}.items():
+            cell = ws.cell(row=1, column=excel_col, value=excel_safe_text(col_name))
+            _style_cell(cell, fill_hex=fill, bold=True, color="FFFFFF",
+                        align="center", wrap=True)
+            ws.column_dimensions[get_column_letter(excel_col)].width = min(
+                max(len(excel_safe_text(col_name)) + 6, 14), 45
+            )
 
-    red_font = Font(color="C0392B", bold=True, name="Calibri", size=10)
+    def _write_simple_header(ws, cols: list[str], fill: str) -> None:
+        """Header row without a Source column — used for only-in-X sheets."""
+        for i, col_name in enumerate(cols, start=1):
+            cell = ws.cell(row=1, column=i, value=excel_safe_text(col_name))
+            _style_cell(cell, fill_hex=fill, bold=True, color="FFFFFF",
+                        align="center", wrap=True)
+            ws.column_dimensions[get_column_letter(i)].width = min(
+                max(len(excel_safe_text(col_name)) + 6, 14), 45
+            )
 
-    # ── 3. Header row (row 1) ────────────────────────────────────────────────
-    src_hdr = ws.cell(row=1, column=SOURCE_COL, value="Source")
-    _style_cell(src_hdr, fill_hex=HEADER_FILL, bold=True, color="FFFFFF", align="center")
-    ws.column_dimensions[get_column_letter(SOURCE_COL)].width = 10
+    # ── 2. Sheet 1 — Discrepancies ────────────────────────────────────────────
+    ws_disc = wb.active
+    ws_disc.title = "Discrepancies"
 
-    for col_name, excel_col in col_to_excel.items():
-        cell = ws.cell(row=1, column=excel_col, value=excel_safe_text(col_name))
-        _style_cell(cell, fill_hex=HEADER_FILL, bold=True, color="FFFFFF",
-                    align="center", wrap=True)
-        ws.column_dimensions[get_column_letter(excel_col)].width = min(
-            max(len(excel_safe_text(col_name)) + 6, 14), 45
-        )
-
-    # ── 4. Discrepancy rows ──────────────────────────────────────────────────
+    _write_header_row(ws_disc, filtered_cols, HEADER_FILL)
     current_row = 2
 
     for disc in result.get("discrepancies", []):
@@ -1035,15 +1028,14 @@ def generate_discrepancy_report(
         diffs:     dict[str, Any] = disc.get("diffs", {})
         diff_set = set(diffs.keys())
 
-        # ── Admin data row ────────────────────────────────────────────────
-        src_cell = ws.cell(row=current_row, column=SOURCE_COL, value="Admin")
+        # Admin data row
+        src_cell = ws_disc.cell(row=current_row, column=SOURCE_COL, value="Admin")
         _style_cell(src_cell, fill_hex=ADMIN_SRC_FILL, bold=True,
                     color="FFFFFF", align="center")
-
         for col_name, excel_col in col_to_excel.items():
             val = admin_row.get(col_name, "")
-            cell = ws.cell(row=current_row, column=excel_col,
-                           value=excel_safe_text(val))
+            cell = ws_disc.cell(row=current_row, column=excel_col,
+                                value=excel_safe_text(val))
             if col_name in diff_set:
                 cell.font  = red_font
                 cell.fill  = PatternFill("solid", start_color="FDECEA")
@@ -1053,20 +1045,18 @@ def generate_discrepancy_report(
                 _style_cell(cell, fill_hex=ADMIN_BG)
         current_row += 1
 
-        # ── Suvidha data row ──────────────────────────────────────────────
-        src_cell = ws.cell(row=current_row, column=SOURCE_COL, value="Suvidha")
+        # Suvidha data row
+        src_cell = ws_disc.cell(row=current_row, column=SOURCE_COL, value="Suvidha")
         _style_cell(src_cell, fill_hex=SUVIDHA_SRC_FILL, bold=True,
                     color="FFFFFF", align="center")
-
         for col_name, excel_col in col_to_excel.items():
             if col_name in diff_set:
                 val = diffs[col_name].get("suvidha", "")
             else:
-                # Look up value in suvidha row using the mapped suvidha column name
                 suv_col = suv_col_lookup.get(col_name, col_name)
                 val = suv_row.get(suv_col, suv_row.get(col_name, ""))
-            cell = ws.cell(row=current_row, column=excel_col,
-                           value=excel_safe_text(val))
+            cell = ws_disc.cell(row=current_row, column=excel_col,
+                                value=excel_safe_text(val))
             if col_name in diff_set:
                 cell.font  = red_font
                 cell.fill  = PatternFill("solid", start_color="E8F8F3")
@@ -1076,20 +1066,47 @@ def generate_discrepancy_report(
                 _style_cell(cell, fill_hex=SUVIDHA_BG)
         current_row += 1
 
-        # ── Thin separator row ────────────────────────────────────────────
+        # Thin separator row
         total_cols = len(filtered_cols) + 1
         for c in range(1, total_cols + 1):
-            sep = ws.cell(row=current_row, column=c, value="")
+            sep = ws_disc.cell(row=current_row, column=c, value="")
             sep.fill = PatternFill("solid", start_color=SEP_FILL)
             sep.border = _border()
-        ws.row_dimensions[current_row].height = 4
+        ws_disc.row_dimensions[current_row].height = 4
         current_row += 1
+
+    # ── 3. Sheet 2 — Only in Admin ────────────────────────────────────────────
+    # FIX (High): "Only in Admin" and "Only in Suvidha" rows are now included
+    # in the downloaded report. Previously these sections were completely missing.
+    only_admin_rows: list[dict] = result.get("only_admin_rows", [])
+    ws_oa = wb.create_sheet(title="Only in Admin")
+    _write_simple_header(ws_oa, filtered_cols, ONLY_ADMIN_FILL)
+    for row_idx, row in enumerate(only_admin_rows, start=2):
+        for col_idx, col_name in enumerate(filtered_cols, start=1):
+            cell = ws_oa.cell(row=row_idx, column=col_idx,
+                              value=excel_safe_text(row.get(col_name, "")))
+            _style_cell(cell, fill_hex="FFEBEE")
+
+    # ── 4. Sheet 3 — Only in Suvidha ─────────────────────────────────────────
+    only_suv_rows: list[dict] = result.get("only_suv_rows", [])
+    suv_cols: list[str] = result.get("suv_cols", filtered_cols)
+    # Use suvidha's own column names for this sheet
+    suv_filtered_cols = [c for c in suv_cols if not _is_report_excluded_column(c)] or suv_cols
+    ws_os = wb.create_sheet(title="Only in Suvidha")
+    _write_simple_header(ws_os, suv_filtered_cols, ONLY_SUV_FILL)
+    for row_idx, row in enumerate(only_suv_rows, start=2):
+        for col_idx, col_name in enumerate(suv_filtered_cols, start=1):
+            cell = ws_os.cell(row=row_idx, column=col_idx,
+                              value=excel_safe_text(row.get(col_name, "")))
+            _style_cell(cell, fill_hex="E0F7FA")
 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
 
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Flask routes
 # ──────────────────────────────────────────────────────────────────────────────
 
