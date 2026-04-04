@@ -212,7 +212,11 @@ def canonical_compare_value(value: Any) -> str:
 
 
 def normalize_key_value(value: Any) -> str:
-    return canonical_text(value).strip().lower()
+    text = canonical_text(value).lower()
+    text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
+    text = text.replace("_", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def _is_zero_or_blank(value: Any) -> bool:
@@ -745,7 +749,7 @@ def map_columns_smart(
             if score > best_score:
                 best_score = score
                 best_sc = sc
-        if best_sc and best_score >= 0.72:
+        if best_sc and best_score >= 0.85:
             mapped.append((ac, best_sc, best_score))
             used_suv.add(best_sc)
 
@@ -782,11 +786,90 @@ def reconcile(
     admin_key: str,
     suv_key: str,
 ) -> dict[str, Any]:
+    def _decimal_from_value(value: Any) -> Decimal | None:
+        num = canonical_numeric_text(value)
+        if num is None:
+            return None
+        try:
+            return Decimal(num)
+        except (InvalidOperation, ValueError):
+            return None
+
+    def _decimal_to_text(value: Decimal) -> str:
+        text = format(value.normalize(), "f").rstrip("0").rstrip(".")
+        return "0" if not text or text == "-0" else text
+
+    def _detect_numeric_columns(rows: list[dict[str, str]], columns: list[str], key_col: str) -> set[str]:
+        hints = ("amount", "tax", "total", "balance", "baki", "paid", "due", "fee", "debit", "credit")
+        numeric_cols: set[str] = set()
+        for col in columns:
+            if col == key_col:
+                continue
+            nk = normalize_column_key(col)
+            if any(h in nk for h in hints):
+                numeric_cols.add(col)
+                continue
+            sample = [canonical_text(r.get(col, "")) for r in rows if canonical_text(r.get(col, ""))]
+            if not sample:
+                continue
+            numeric_count = sum(1 for v in sample if _decimal_from_value(v) is not None)
+            if (numeric_count / len(sample)) >= 0.8:
+                numeric_cols.add(col)
+        return numeric_cols
+
+    def _aggregate_group(
+        entries: list[dict[str, Any]],
+        columns: list[str],
+        numeric_columns: set[str],
+    ) -> dict[str, Any]:
+        agg_row: dict[str, str] = {}
+        numeric_totals: dict[str, Decimal] = {}
+        for col in columns:
+            values = [e["row"].get(col, "") for e in entries]
+            if col in numeric_columns:
+                total = Decimal("0")
+                found = False
+                for value in values:
+                    dec = _decimal_from_value(value)
+                    if dec is not None:
+                        total += dec
+                        found = True
+                if found:
+                    agg_row[col] = _decimal_to_text(total)
+                    numeric_totals[col] = total
+                else:
+                    agg_row[col] = ""
+            else:
+                chosen = ""
+                for value in values:
+                    txt = canonical_text(value)
+                    if txt:
+                        chosen = txt
+                        break
+                agg_row[col] = chosen
+        return {
+            "row": agg_row,
+            "numeric_totals": numeric_totals,
+            "display_key": next((e["display_key"] for e in entries if e.get("display_key")), ""),
+            "df_row_index": entries[0]["df_row_index"] if entries else -1,
+            "excel_rows": [e["excel_row"] for e in entries if e.get("excel_row", -1) > 0],
+            "count": len(entries),
+        }
+
+    def _is_identifier_column_name(col_name: str) -> bool:
+        nk = normalize_column_key(col_name)
+        fragments = ("name", "id", "code", "account", "acc", "member", "holder", "owner")
+        return any(f in nk for f in fragments)
+
     admin_idx, admin_missing_keys = _build_key_index(admin.rows, admin_key, admin.row_position_map)
     suv_idx, suv_missing_keys = _build_key_index(suv.rows, suv_key, suv.row_position_map)
 
     col_pairs = map_columns_smart(admin.columns, suv.columns, admin_key, suv_key)
     pair_lookup = {a: s for a, s, _ in col_pairs}
+
+    admin_numeric_cols = _detect_numeric_columns(admin.rows, admin.columns, admin_key)
+    suv_numeric_cols = _detect_numeric_columns(suv.rows, suv.columns, suv_key)
+    identifier_columns = [c for c in admin.columns if c == admin_key or _is_identifier_column_name(c)]
 
     admin_keys = set(admin_idx)
     suv_keys = set(suv_idx)
@@ -794,69 +877,86 @@ def reconcile(
     only_admin_keys = admin_keys - suv_keys
     only_suv_keys = suv_keys - admin_keys
 
-    discrepancies = []
+    discrepancies: list[dict[str, Any]] = []
     matching_records = 0
-    duplicate_key_conflicts = []
+    duplicate_key_conflicts: list[dict[str, Any]] = []
 
     for key in sorted(common):
         a_rows = admin_idx[key]
         s_rows = suv_idx[key]
 
         if len(a_rows) != 1 or len(s_rows) != 1:
-            duplicate_key_conflicts.append({
-                "key": key,
-                "admin_count": len(a_rows),
-                "suvidha_count": len(s_rows),
-            })
+            duplicate_key_conflicts.append(
+                {"key": key, "admin_count": len(a_rows), "suvidha_count": len(s_rows)}
+            )
 
-        a_item = a_rows[0]
-        s_item = s_rows[0]
-        a = a_item["row"]
-        s = s_item["row"]
+        a_agg = _aggregate_group(a_rows, admin.columns, admin_numeric_cols)
+        s_agg = _aggregate_group(s_rows, suv.columns, suv_numeric_cols)
+        a = a_agg["row"]
+        s = s_agg["row"]
         diffs: dict[str, Any] = {}
 
         for ac, sc, confidence in col_pairs:
-            av = canonical_text(a.get(ac, ""))
-            sv = canonical_text(s.get(sc, ""))
-            if not values_equivalent_for_compare(av, sv):
-                position = admin.column_position_map.get(
-                    ac,
-                    {"df_index": admin.columns.index(ac), "excel_col": admin.columns.index(ac) + 1},
-                )
-                diffs[ac] = {
-                    "admin": av,
-                    "suvidha": sv,
-                    "suv_col": sc,
-                    "confidence": round(confidence, 4),
-                    "df_index": position["df_index"],
-                    "excel_col": position["excel_col"],
-                }
+            is_numeric = ac in admin_numeric_cols or sc in suv_numeric_cols
+            position = admin.column_position_map.get(
+                ac,
+                {"df_index": admin.columns.index(ac), "excel_col": admin.columns.index(ac) + 1},
+            )
+            if is_numeric:
+                a_total = a_agg["numeric_totals"].get(ac, Decimal("0"))
+                s_total = s_agg["numeric_totals"].get(sc, Decimal("0"))
+                if a_total != s_total:
+                    diffs[ac] = {
+                        "admin": _decimal_to_text(a_total),
+                        "suvidha": _decimal_to_text(s_total),
+                        "difference": _decimal_to_text(a_total - s_total),
+                        "is_numeric": True,
+                        "suv_col": sc,
+                        "confidence": round(confidence, 4),
+                        "df_index": position["df_index"],
+                        "excel_col": position["excel_col"],
+                    }
+            else:
+                av = canonical_text(a.get(ac, ""))
+                sv = canonical_text(s.get(sc, ""))
+                if not values_equivalent_for_compare(av, sv):
+                    diffs[ac] = {
+                        "admin": av,
+                        "suvidha": sv,
+                        "difference": "",
+                        "is_numeric": False,
+                        "suv_col": sc,
+                        "confidence": round(confidence, 4),
+                        "df_index": position["df_index"],
+                        "excel_col": position["excel_col"],
+                    }
 
         if diffs:
-            discrepancies.append({
-                "key": a_item["display_key"] or key,
-                "normalized_key": key,
-                "row_index": a_item["df_row_index"],
-                "admin_excel_row": a_item["excel_row"],
-                "suvidha_excel_row": s_item["excel_row"],
-                "admin_row": a,
-                "suv_row": s,
-                "diffs": diffs,
-            })
+            discrepancies.append(
+                {
+                    "key": a_agg["display_key"] or s_agg["display_key"] or key,
+                    "normalized_key": key,
+                    "row_index": a_agg["df_row_index"],
+                    "admin_excel_rows": a_agg["excel_rows"],
+                    "suvidha_excel_rows": s_agg["excel_rows"],
+                    "admin_count": a_agg["count"],
+                    "suvidha_count": s_agg["count"],
+                    "admin_row": a,
+                    "suv_row": s,
+                    "diffs": diffs,
+                }
+            )
         else:
             matching_records += 1
 
-    only_admin_rows = [item["row"] for key in sorted(only_admin_keys) for item in admin_idx[key]]
-    only_suv_rows = [item["row"] for key in sorted(only_suv_keys) for item in suv_idx[key]]
+    only_admin_rows = [item["row"] for k in sorted(only_admin_keys) for item in admin_idx[k]]
+    only_suv_rows = [item["row"] for k in sorted(only_suv_keys) for item in suv_idx[k]]
 
     return {
         "discrepancies": discrepancies,
         "only_admin_rows": only_admin_rows,
         "only_suv_rows": only_suv_rows,
-        "col_pairs": [
-            {"admin_col": a, "suv_col": s, "confidence": round(c, 4)}
-            for a, s, c in col_pairs
-        ],
+        "col_pairs": [{"admin_col": a, "suv_col": s, "confidence": round(c, 4)} for a, s, c in col_pairs],
         "admin_key": admin_key,
         "suv_key": suv_key,
         "admin_cols": admin.columns,
@@ -867,9 +967,10 @@ def reconcile(
             "duplicate_key_conflicts": duplicate_key_conflicts,
             "admin_missing_keys": admin_missing_keys,
             "suvidha_missing_keys": suv_missing_keys,
-            "unmapped_admin_cols": [
-                c for c in admin.columns if c != admin_key and c not in pair_lookup
-            ],
+            "identifier_columns": identifier_columns,
+            "admin_numeric_columns": sorted(admin_numeric_cols),
+            "suvidha_numeric_columns": sorted(suv_numeric_cols),
+            "unmapped_admin_cols": [c for c in admin.columns if c != admin_key and c not in pair_lookup],
         },
         "stats": {
             "total": len(admin_keys | suv_keys),
