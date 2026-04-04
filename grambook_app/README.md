@@ -1,7 +1,14 @@
 # Grambook Reconciliation Tool
 
 A full-stack web app: Flask backend + browser frontend.
-Upload Admin & Suvidha exports, pick the linking ID column, and get a discrepancy report downloadable as `.xlsx`.
+Upload Admin & Suvidha exports, pick the linking ID column.
+
+**Download format (NEW):**
+- ONLY discrepancy records
+- 2 rows per discrepancy: "Admin - KEY" / "Suvidha - KEY"  
+- ONLY mismatched columns filled (others BLANK)
+- Mismatches: red bold font
+- Preserves Gujarati text, headers, normalization
 
 ## Setup & Run
 

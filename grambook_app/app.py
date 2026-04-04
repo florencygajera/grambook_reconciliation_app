@@ -895,126 +895,71 @@ def _style_cell(
     cell.border = _border()
 
 
-def highlight_excel_fast(
-    original_file_bytes: bytes,
+def generate_discrepancy_report(
+    admin_cols: list[str],
     result: dict,
-    parsed_admin: ParsedDataset,
 ) -> io.BytesIO:
     """
-    FIX — Round-trip format preservation:
-    Opens the original uploaded file and highlights only the discrepant cells in
-    red, leaving the complete multi-header structure, merges, and formatting intact.
-
-    Row mapping:
-      The parsed DataFrame's row index 0 corresponds to the first DATA row in the
-      original xlsx, which sits at Excel row:
-        header_row_index  (0-based blank/leading rows before header)
-        + header_row_span (number of header rows)
-        + 1               (convert to 1-based Excel addressing)
-      So:  excel_row = df_row_index + header_row_index + header_row_span + 1
-
-    Column mapping:
-      col_index in diffs = position within the parsed admin_cols list.
-      kept_indices[col_index] = 0-based original xlsx column index.
-      Add 1 for 1-based Excel column addressing.
+    Generate minimal Excel report showing ONLY discrepancies.
+    - Headers: admin_cols
+    - For each discrepancy: Admin row + Suvidha row
+    - Col A: "Admin/Suvidha - key"
+    - Other columns: ONLY mismatch values (using col_index), BLANK elsewhere
+    - Red bold styling ONLY on mismatch cells
     """
-    wb = load_workbook(io.BytesIO(original_file_bytes), read_only=False)
-    ws = wb.active
-
-    # FFFF0000 = fully opaque red (openpyxl requires 8-char ARGB hex)
-    red_font  = Font(color="FFFF0000", bold=True)
-    red_fill  = PatternFill("solid", start_color="FFFFE0E0")
-
-    # First data row in xlsx (1-based)
-    data_row_offset = parsed_admin.header_row_index + parsed_admin.header_row_span + 1
-
-    # Map: parsed column list position → 1-based xlsx column number
-    kept = parsed_admin.kept_indices
-    parsed_col_to_xlsx_col = {
-        parsed_idx: (orig_0based_idx + 1)
-        for parsed_idx, orig_0based_idx in enumerate(kept)
-    }
-
-    for disc in result["discrepancies"]:
-        excel_row = disc["row_index"] + data_row_offset
-        for col_name, diff in disc["diffs"].items():
-            xlsx_col = parsed_col_to_xlsx_col.get(diff["col_index"])
-            if xlsx_col is None:
-                continue
-            cell = ws.cell(row=excel_row, column=xlsx_col)
-            cell.font = red_font
-            cell.fill = red_fill
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf
-
-
-def _write_sheet_table(ws, headers: list[str], rows: list[dict[str, Any]], header_fill: str = "1F4E78") -> None:
-    for c, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=c, value=excel_safe_text(h))
-        _style_cell(cell, fill_hex=header_fill, bold=True, color="FFFFFF", align="center", wrap=True)
-    for r_idx, row in enumerate(rows, 2):
-        for c_idx, h in enumerate(headers, 1):
-            cell = ws.cell(row=r_idx, column=c_idx, value=excel_safe_text(row.get(h, "")))
-            _style_cell(cell)
-    for idx, header in enumerate(headers, 1):
-        values = [str(header)] + [str(r.get(header, "")) for r in rows[:2000]]
-        ws.column_dimensions[get_column_letter(idx)].width = min(max(len(v) for v in values) + 3, 45)
-
-
-def build_xlsx(result: dict) -> io.BytesIO:
     wb = Workbook()
     ws = wb.active
-    ws.title = "Reconciliation"
-
-    ws["A1"] = excel_safe_text("Grambook Reconciliation Report")
-    ws["A1"].font = Font(bold=True, size=14)
-    ws["A2"] = excel_safe_text(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    ws["A2"].font = Font(italic=True, size=9)
-    ws["A4"] = excel_safe_text("Summary")
-    ws["A4"].font = Font(bold=True, size=12)
-
-    stats = result.get("stats", {})
-    row = 5
-    for label, key in [
-        ("Total Records", "total"), ("Matched", "matched"),
-        ("Discrepancies", "disc"), ("Only in Admin", "only_a"),
-        ("Only in Suvidha", "only_s"),
-    ]:
-        ws[f"A{row}"] = excel_safe_text(label)
-        ws[f"B{row}"] = stats.get(key, 0)
-        row += 1
-
-    discrepancies = result.get("discrepancies", [])
-    admin_cols = result.get("admin_cols", [])
-
-    if discrepancies and admin_cols:
-        row += 2
-        ws[f"A{row}"] = excel_safe_text("Discrepancies")
-        ws[f"A{row}"].font = Font(bold=True, size=11)
-        row += 1
-        for col_idx, col in enumerate(admin_cols, 1):
-            cell = ws.cell(row=row, column=col_idx, value=excel_safe_text(col))
-            cell.fill = PatternFill(start_color="FFE6E6", end_color="FFE6E6", fill_type="solid")
-            cell.font = Font(bold=True)
-        for disc in discrepancies:
-            row += 1
-            for col_idx, col in enumerate(admin_cols, 1):
-                cell = ws.cell(row=row, column=col_idx,
-                               value=excel_safe_text(disc.get("admin_row", {}).get(col, "")))
-                if col in disc.get("diffs", {}):
-                    cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-                    cell.font = Font(color="FFFFFF", bold=True)
-
-    for col in range(1, len(admin_cols) + 1):
-        ws.column_dimensions[get_column_letter(col)].width = 20
-
+    ws.title = "Discrepancies"
+    
+    # Header row
+    header_fill = "1F4E78"
+    for c, col_name in enumerate(admin_cols, 1):
+        cell = ws.cell(row=1, column=c, value=excel_safe_text(col_name))
+        _style_cell(cell, fill_hex=header_fill, bold=True, color="FFFFFF", align="center", wrap=True)
+    
+    # Red style for mismatches
+    red_font = Font(color="FF0000", bold=True, name="Calibri", size=10)
+    
+    # Data rows
+    current_row = 2
+    for disc in result["discrepancies"]:
+        key = disc["key"]
+        diffs = disc["diffs"]
+        
+        # Admin row
+        ws.cell(row=current_row, column=1, value=f"Admin - {excel_safe_text(key)}")
+        _style_cell(ws.cell(row=current_row, column=1))
+        for col_name, diff_info in diffs.items():
+            col_idx = diff_info["col_index"]
+        cell = ws.cell(row=current_row, column=col_idx + 1, value=excel_safe_text(diff_info["admin"]))
+        cell.font = red_font
+        cell.border = _border()
+        current_row += 1
+        
+        # Suvidha row
+        ws.cell(row=current_row, column=1, value=f"Suvidha - {excel_safe_text(key)}")
+        _style_cell(ws.cell(row=current_row, column=1))
+        for col_name, diff_info in diffs.items():
+            col_idx = diff_info["col_index"]
+            cell = ws.cell(row=current_row, column=col_idx + 1, value=excel_safe_text(diff_info["suvidha"]))
+            cell.font = red_font
+            cell.border = _border()
+        current_row += 1
+    
+    # Auto-fit columns
+    for idx, col_name in enumerate(admin_cols, 1):
+        ws.column_dimensions[get_column_letter(idx)].width = min(len(excel_safe_text(col_name)) + 10, 45)
+    
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
+
+
+
+
+
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1168,11 +1113,6 @@ def download():
         return jsonify({"error": "Both files and key columns are required."}), 400
 
     try:
-        # Read raw bytes before file_storage is consumed by parse_uploaded_dataset
-        admin_bytes = admin_file.read()
-        admin_file.seek(0)
-        suv_file.seek(0)
-
         admin = parse_uploaded_dataset(admin_file,
                                        _parse_optional_int(request.form.get("admin_header_row")),
                                        _parse_optional_int(request.form.get("admin_header_span")))
@@ -1185,9 +1125,7 @@ def download():
 
         result = reconcile(admin.rows, admin.columns, suv.rows, suv.columns, admin_key, suv_key)
 
-        # Return the original file with discrepant cells highlighted in red.
-        # This preserves the multi-header structure exactly as it was uploaded.
-        buf = highlight_excel_fast(admin_bytes, result, admin)
+        buf = generate_discrepancy_report(admin.columns, result)
 
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
