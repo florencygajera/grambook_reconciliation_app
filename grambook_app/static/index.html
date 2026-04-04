@@ -355,9 +355,8 @@ function populateSel(selId, cols, pref, colMeta) {
   cols.forEach(c => {
     const m = metaByCol[c] || {};
     const group = (m.group && m.group !== 'Other') ? m.group : 'Other';
-    const label = m.hierarchy || c;
     if (!groups[group]) groups[group] = [];
-    groups[group].push({ value: c, label });
+    groups[group].push({ value: c, label: group === 'Other' ? c : group });
   });
 
   const groupNames = Object.keys(groups).sort((a, b) => {
@@ -368,7 +367,10 @@ function populateSel(selId, cols, pref, colMeta) {
 
   let html = '';
   groupNames.forEach(g => {
-    const opts = groups[g].map(item => `<option value="${esc(item.value)}">${esc(item.label)}</option>`).join('');
+    const opts = groups[g].map((item, idx) => {
+      const label = (g === 'Other') ? item.label : (groups[g].length > 1 ? `${item.label} ${idx + 1}` : item.label);
+      return `<option value="${esc(item.value)}">${esc(label)}</option>`;
+    }).join('');
     html += g === 'Other' ? opts : `<optgroup label="${esc(g)}">${opts}</optgroup>`;
   });
 

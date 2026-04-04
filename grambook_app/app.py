@@ -556,6 +556,14 @@ def build_headers(
     header_rows = local_rows[:chosen_span]
     raw_headers = []
     for c in range(max_cols):
+        # Display/header naming preference:
+        # 1) top header row value (tax group level)
+        # 2) fallback to merged multi-row combined text
+        primary = canonical_text(header_rows[0][c]) if header_rows else ""
+        if primary:
+            raw_headers.append(primary)
+            continue
+
         parts = [header_rows[r][c] for r in range(chosen_span) if header_rows[r][c]]
         deduped = []
         for p in parts:
