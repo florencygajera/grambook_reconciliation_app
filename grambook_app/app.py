@@ -945,81 +945,83 @@ def generate_discrepancy_report(
     admin: ParsedDataset,
     result: dict,
 ) -> io.BytesIO:
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Discrepancies"
 
-    position_map = admin.column_position_map
-    if not position_map:
-        raise ReconciliationError("Missing admin column position map for Excel output.")
+    # 🔥 FIX: Create NEW column mapping (do NOT use original excel_col)
+    new_col_map = {
+        col: idx + 2  # column 1 reserved for key
+        for idx, col in enumerate(admin.columns)
+    }
 
-    header_fill = "1F4E78"
-    for col_name in admin.columns:
-        col_pos = position_map.get(col_name)
-        if not col_pos:
-            continue
-        excel_col = col_pos["excel_col"]
-        cell = ws.cell(row=1, column=excel_col, value=excel_safe_text(col_name))
-        _style_cell(cell, fill_hex=header_fill, bold=True, color="FFFFFF", align="center", wrap=True)
+    # ================= HEADER =================
+    ws.cell(row=1, column=1, value="Name")
+
+    for col, col_idx in new_col_map.items():
+        cell = ws.cell(row=1, column=col_idx, value=excel_safe_text(col))
+        _style_cell(cell, fill_hex="1F4E78", bold=True, color="FFFFFF", align="center", wrap=True)
 
     red_font = Font(color="FF0000", bold=True, name="Calibri", size=10)
 
     current_row = 2
+
+    # ================= DATA =================
     for disc in result.get("discrepancies", []):
         key = disc["key"]
         diffs = disc.get("diffs", {})
 
+        # 🔴 Admin row
         ws.cell(row=current_row, column=1, value=f"Admin - {excel_safe_text(key)}")
-        _style_cell(ws.cell(row=current_row, column=1))
-        for diff_info in diffs.values():
-            excel_col = diff_info.get("excel_col")
-            if not excel_col:
+
+        for col_name, diff in diffs.items():
+            col_idx = new_col_map.get(col_name)
+            if not col_idx:
                 continue
+
             cell = ws.cell(
                 row=current_row,
-                column=int(excel_col),
-                value=excel_safe_text(diff_info.get("admin", "")),
+                column=col_idx,
+                value=excel_safe_text(diff.get("admin", "")),
             )
             cell.font = red_font
-            cell.border = _border()
+
         current_row += 1
 
+        # 🔴 Suvidha row
         ws.cell(row=current_row, column=1, value=f"Suvidha - {excel_safe_text(key)}")
-        _style_cell(ws.cell(row=current_row, column=1))
-        for diff_info in diffs.values():
-            excel_col = diff_info.get("excel_col")
-            if not excel_col:
+
+        for col_name, diff in diffs.items():
+            col_idx = new_col_map.get(col_name)
+            if not col_idx:
                 continue
+
             cell = ws.cell(
                 row=current_row,
-                column=int(excel_col),
-                value=excel_safe_text(diff_info.get("suvidha", "")),
+                column=col_idx,
+                value=excel_safe_text(diff.get("suvidha", "")),
             )
             cell.font = red_font
-            cell.border = _border()
+
         current_row += 1
 
-    for col_name in admin.columns:
-        col_pos = position_map.get(col_name)
-        if not col_pos:
-            continue
-        excel_col = col_pos["excel_col"]
-        ws.column_dimensions[get_column_letter(excel_col)].width = min(
-            len(excel_safe_text(col_name)) + 10,
-            45,
-        )
+    # ================= WIDTH FIX =================
+    from openpyxl.styles import Alignment
 
+    for col_idx in range(1, len(admin.columns) + 2):
+        col_letter = get_column_letter(col_idx)
+        ws.column_dimensions[col_letter].width = 35
+
+        for row in ws.iter_rows(min_col=col_idx, max_col=col_idx):
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    # ================= SAVE =================
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
-
-
-
-
-
-
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Flask routes
