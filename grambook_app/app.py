@@ -763,6 +763,8 @@ def parse_uploaded_dataset(
     parsed.parser_notes.extend(notes)
     return parsed
 
+def normalize_key_value(x):
+    return canonical_text(x).strip().lower()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Reconciliation
@@ -968,11 +970,21 @@ def generate_discrepancy_report(
     ws = wb.active
     ws.title = "Discrepancies"
 
-    # 🔥 Clean column mapping
+    # 🔥 REMOVE KEY COLUMN FROM DATA COLUMNS
+    filtered_columns = [
+        col for col in admin.columns
+        if col != admin.key_column   # 👈 IMPORTANT
+    ]
+
     new_col_map = {
         col: idx + 2
-        for idx, col in enumerate(admin.columns)
+        for idx, col in enumerate(filtered_columns)
     }
+
+   # 🔥 Ensure correct semantic placement
+    if col_name.lower() not in ["નંબર", "ઘરવેરો બાકી", "amount", "tax"]:
+    continue:
+    
 
     # ================= HEADER =================
     ws.cell(row=1, column=1, value="Name")
@@ -1059,6 +1071,17 @@ def generate_discrepancy_report(
     wb.save(buf)
     buf.seek(0)
     return buf
+
+def strict_column_match(admin_cols, suv_cols):
+    mapping = {}
+
+    for ac in admin_cols:
+        for sc in suv_cols:
+            if normalize_key(ac) == normalize_key(sc):
+                mapping[ac] = sc
+                break
+
+    return mapping
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Flask routes
