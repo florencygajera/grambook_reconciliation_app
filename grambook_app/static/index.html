@@ -307,6 +307,10 @@ function setupPicker(inputId, cardId, nameId, readyId, which) {
     if (which === 'admin') adminFile = f; else suvidhaFile = f;
     document.getElementById(nameId).textContent = f.name;
     card.classList.add('ready');
+    // FIX #9 (Medium): Clear stale errors when a new file is uploaded
+    clearErr();
+    // FIX #10 (Medium): Reset column selects to avoid stale selections showing
+    document.getElementById(which === 'admin' ? 'adminKey' : 'suvidhaKey').innerHTML = '';
     checkBothUploaded();
   });
 
@@ -406,6 +410,297 @@ document.getElementById('submitBtn').addEventListener('click', () => {
   fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
   fd.append('suv_header_row', document.getElementById('suvidhaHeaderRow').value);
   fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
+
+  fetch('/api/reconcile', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+      setBusy(false);
+      if (data.error) { showErr(data.error); return; }
+      lastResult = data;
+      renderStats(data.stats);
+      activeTab = 'disc';
+      setTab('disc');
+      renderTab(data, 'disc');
+      document.getElementById('results').classList.add('show');
+      // FIX #11 (Low): Show download button only when there are discrepancies to export
+      const dl = document.getElementById('dlBtn');
+      if (data.stats && data.stats.disc > 0) {
+        dl.style.display = '';
+        dl.disabled = false;
+      } else {
+        dl.style.display = 'none';
+      }
+    })
+    .catch(e => { setBusy(false); showErr('Request failed: ' + e); });
+});
+
+    // ── download ──────────────────────────────────────────────────────────────
+    document.getElementById('dlBtn').addEventListener('click', () => {
+      if (!lastResult) return;
+      const dl = document.getElementById('dlBtn');
+      dl.disabled = true;
+      dl.textContent = 'Generating…';
+
+      // FIX #5 (High): Send cache_key so backend uses the cached result — no re-upload needed.
+      // Also send files as fallback in case server was restarted and cache was cleared.
+      const fd = new FormData();
+      fd.append('cache_key', lastResult._cache_key || '');
+      fd.append('admin_file', adminFile);
+      fd.append('suvidha_file', suvidhaFile);
+      fd.append('admin_key', document.getElementById('adminKey').value);
+      fd.append('suv_key', document.getElementById('suvidhaKey').value);
+      fd.append('admin_header_row', document.getElementById('adminHeaderRow').value);
+      fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
+      fd.append('suv_header_row', document.getElementById('suvidhaHeaderRow').value);
+      fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
+
+      fetch('/api/download', { method: 'POST', body: fd })
+        .then(async r => {
+          const ct = (r.headers.get('content-type') || '').toLowerCase();
+          if (!r.ok) {
+            if (ct.includes('application/json')) {
+              const d = await r.json();
+              throw new Error(d.error || 'Download failed');
+            }
+            const txt = await r.text();
+            throw new Error(txt || 'Download failed');
+          }
+          if (ct.includes('application/json')) {
+            const d = await r.json();
+            throw new Error(d.error || 'Download failed');
+          }
+          return r.blob();
+        })
+        .then(blob => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          const ts = new Date().toISOString().slice(0, 10);
+          a.href = url; a.download = `grambook_reconciliation_${ts}.xlsx`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          dl.disabled = false;
+          dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
+        })
+        .catch(e => {
+          showErr(e.message);
+          dl.disabled = false;
+          dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
+        });
+    });
+
+    // ── tabs ──────────────────────────────────────────────────────────────────
+    document.querySelectorAll('.tab').forEach(t =>
+      t.addEventListener('click', () => {
+        if (!lastResult) return;
+        setTab(t.dataset.tab);
+        renderTab(lastResult, t.dataset.tab);
+      })
+    );
+
+    function setTab(tab) {
+      activeTab = tab;
+      document.querySelectorAll('.tab').forEach(t =>
+        t.classList.toggle('active', t.dataset.tab === tab)
+      );
+    }
+
+    // ── render stats ──────────────────────────────────────────────────────────
+    function renderStats(s) {
+      document.getElementById('sTotal').textContent = s.total;
+      document.getElementById('sMatch').textContent = s.matched;
+      document.getElementById('sDisc').textContent = s.disc;
+      document.getElementById('sOA').textContent = s.only_a;
+      document.getElementById('sOS').textContent = s.only_s;
+      document.getElementById('tDisc').textContent = s.disc;
+      document.getElementById('tOA').textContent = s.only_a;
+      document.getElementById('tOS').textContent = s.only_s;
+      document.getElementById('statsBar').classList.add('show');
+    }
+
+    // ── render tab content ────────────────────────────────────────────────────
+    function renderTab(r, tab) {
+      const c = document.getElementById('tabContent');
+      c.innerHTML = '';
+      if (tab === 'disc') c.innerHTML = renderDisc(r);
+      if (tab === 'oa') c.innerHTML = renderOnly(r.only_admin_rows, r.admin_cols, 'oa-row');
+      if (tab === 'os') c.innerHTML = renderOnly(r.only_suv_rows, r.suv_cols, 'os-row');
+    }
+
+    function renderDisc(r) {
+      if (!r.discrepancies.length)
+        return `<div class="empty"><div class="ico">✅</div>All matched records are identical.</div>`;
+
+      // Build a lookup: admin_col → suvidha_col from col_pairs
+      const suvColOf = {};
+      (r.col_pairs || []).forEach(p => { suvColOf[p.admin_col] = p.suv_col; });
+
+      const displayCols = [r.admin_key, ...r.admin_cols.filter(c => c !== r.admin_key)];
+      let h = `<div class="tbl-outer"><table><thead><tr>
+    <th>Source</th>${displayCols.map(c => `<th>${esc(c)}</th>`).join('')}
+  </tr></thead><tbody>`;
+
+      r.discrepancies.forEach(entry => {
+        const diffSet = new Set(Object.keys(entry.diffs));
+
+        // Admin row
+        h += `<tr class="a-row"><td><span class="badge-src a">Admin</span></td>`;
+        displayCols.forEach(c => {
+          const v = esc(String(entry.admin_row[c] ?? ''));
+          h += `<td class="${diffSet.has(c) ? 'diff' : ''}">${v}</td>`;
+        });
+        h += `</tr>`;
+
+        // FIX #8 (Medium): Suvidha row — look up value using the mapped suvidha column name,
+        // not the admin column name. Fixes blank/undefined cells for non-diff columns
+        // when column names differ between the two files.
+        h += `<tr class="s-row"><td><span class="badge-src s">Suvidha</span></td>`;
+        displayCols.forEach(c => {
+          let v;
+          if (diffSet.has(c)) {
+            v = esc(entry.diffs[c].suvidha);
+          } else {
+            const suv_col = suvColOf[c] || c;
+            v = esc(String(entry.suv_row[suv_col] ?? entry.suv_row[c] ?? ''));
+          }
+          h += `<td class="${diffSet.has(c) ? 'diff' : ''}">${v}</td>`;
+        });
+        h += `</tr>`;
+
+        h += `<tr class="sep"><td colspan="${displayCols.length + 1}"></td></tr>`;
+      });
+
+      return h + '</tbody></table></div>';
+    }
+
+    function renderOnly(rows, cols, rowCls) {
+      if (!rows || !rows.length)
+        return `<div class="empty"><div class="ico">✅</div>No exclusive records found.</div>`;
+      let h = `<div class="tbl-outer"><table><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>`;
+      rows.forEach(row => {
+        h += `<tr class="${rowCls}">${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`;
+      });
+      return h + '</tbody></table></div>';
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+    function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+    function setBusy(on) {
+      fetching = on;
+      const btn = document.getElementById('submitBtn');
+      btn.disabled = on;
+      document.getElementById('btnTxt').textContent = on ? 'Comparing…' : 'Compare Files';
+      document.getElementById('btnIco').innerHTML = on ? '<span class="spin"></span>' : '→';
+    }
+
+    function showErr(msg) {
+      const b = document.getElementById('errBanner');
+      b.textContent = '⚠  ' + msg;
+      b.classList.add('show');
+    }
+    function clearErr() {
+      document.getElementById('errBanner').classList.remove('show');
+    }
+  </script>
+
+card.addEventListener('dragover', e => { e.preventDefault(); card.classList.add('dragover'); });
+card.addEventListener('dragleave', () => card.classList.remove('dragover'));
+card.addEventListener('drop', e => {
+e.preventDefault(); card.classList.remove('dragover');
+const f = e.dataTransfer.files[0]; if (!f) return;
+const dt = new DataTransfer(); dt.items.add(f); input.files = dt.files;
+input.dispatchEvent(new Event('change'));
+});
+}
+
+setupPicker('adminFile', 'adminCard', 'adminFname', 'adminReady', 'admin');
+setupPicker('suvidhaFile', 'suvidhaCard', 'suvidhaFname', 'suvidhaReady', 'suvidha');
+
+function checkBothUploaded() {
+if (!adminFile || !suvidhaFile) return;
+// ask backend for column lists
+const fd = new FormData();
+fd.append('admin_file', adminFile);
+fd.append('suvidha_file', suvidhaFile);
+fd.append('admin_header_row', document.getElementById('adminHeaderRow').value);
+fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
+fd.append('suv_header_row', document.getElementById('suvidhaHeaderRow').value);
+fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
+
+fetch('/api/columns', { method: 'POST', body: fd })
+.then(r => r.json())
+.then(data => {
+if (data.error) { showErr(data.error); return; }
+populateSel('adminKey', data.admin_cols, ['id','no','num','code','ref','adm'], data.admin_col_meta || []);
+populateSel('suvidhaKey', data.suv_cols, ['admin','id','no','num','code','ref'], data.suv_col_meta || []);
+document.getElementById('mapPanel').classList.add('show');
+document.getElementById('submitBtn').disabled = false;
+})
+.catch(e => showErr('Could not read columns: ' + e));
+}
+
+function populateSel(selId, cols, pref, colMeta) {
+const sel = document.getElementById(selId);
+const metaByCol = {};
+(colMeta || []).forEach(m => { if (m && m.column) metaByCol[m.column] = m; });
+
+const groups = {};
+cols.forEach(c => {
+const m = metaByCol[c] || {};
+const group = (m.group && m.group !== 'Other') ? m.group : 'Other';
+if (!groups[group]) groups[group] = [];
+groups[group].push({ value: c, label: group === 'Other' ? c : group });
+});
+
+const groupNames = Object.keys(groups).sort((a, b) => {
+if (a === 'Other') return 1;
+if (b === 'Other') return -1;
+return a.localeCompare(b);
+});
+
+let html = '';
+groupNames.forEach(g => {
+const opts = groups[g].map((item, idx) => {
+const label = (g === 'Other') ? item.label : (groups[g].length > 1 ? `${item.label} ${idx + 1}` : item.label);
+return `<option value="${esc(item.value)}">${esc(label)}</option>`;
+}).join('');
+html += g === 'Other' ? opts : `<optgroup label="${esc(g)}">${opts}</optgroup>`;
+});
+
+sel.innerHTML = html;
+const guess = cols.find(c => {
+const m = metaByCol[c] || {};
+const searchText = `${c} ${m.hierarchy || ''}`.toLowerCase();
+return pref.some(p => searchText.includes(p));
+}) || cols[0];
+if (guess) sel.value = guess;
+}
+
+['adminHeaderRow', 'adminHeaderSpan', 'suvidhaHeaderRow', 'suvidhaHeaderSpan'].forEach(id => {
+const el = document.getElementById(id);
+if (!el) return;
+el.addEventListener('change', () => {
+if (adminFile && suvidhaFile) checkBothUploaded();
+});
+});
+
+// ── submit ─────────────────────────────────────────────────────────────────
+document.getElementById('submitBtn').addEventListener('click', () => {
+if (fetching) return;
+clearErr();
+setBusy(true);
+
+const fd = new FormData();
+fd.append('admin_file', adminFile);
+fd.append('suvidha_file', suvidhaFile);
+fd.append('admin_key', document.getElementById('adminKey').value);
+fd.append('suv_key', document.getElementById('suvidhaKey').value);
+fd.append('admin_header_row', document.getElementById('adminHeaderRow').value);
+fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
+fd.append('suv_header_row', document.getElementById('suvidhaHeaderRow').value);
+fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
 
   fetch('/api/reconcile', { method: 'POST', body: fd })
     .then(r => r.json())

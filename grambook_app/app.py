@@ -942,73 +942,148 @@ def _style_cell(
     cell.border = _border()
 
 
+# Columns that should never appear in the generated discrepancy report.
+# These are serial-number / row-number columns that carry no reconciliation value.
+_REPORT_EXCLUDE_SUBSTRINGS: list[str] = [
+    "ક્રમ",    # Gujarati: serial number
+    "નંબર",    # Gujarati: number
+]
+_REPORT_EXCLUDE_NORM_KEYS: set[str] = {
+    "no", "sr", "srno", "sno", "serialno", "number", "slno", "seq",
+}
+
+
+def _is_report_excluded_column(col_name: str) -> bool:
+    """Return True for serial / sequence columns that must be dropped from the Excel report."""
+    text = canonical_text(col_name)
+    for sub in _REPORT_EXCLUDE_SUBSTRINGS:
+        if sub in text:
+            return True
+    nk = normalize_column_key(col_name)
+    return nk in _REPORT_EXCLUDE_NORM_KEYS
+
+
 def generate_discrepancy_report(
     admin: ParsedDataset,
     result: dict,
 ) -> io.BytesIO:
+    """
+    Build the discrepancy Excel report.
+
+    Layout
+    ------
+    • Column 1  : "Source" label  (Admin / Suvidha)
+    • Column 2+ : one column per *filtered* admin column (ક્રમ / નંબર excluded)
+
+    For every discrepancy pair the full row is written so that:
+      - names land in their actual column (e.g. કબજેદારનું નામ)
+      - numeric values land in their actual column (e.g. ઘરવેરો બાકી)
+      - mismatched cells are highlighted red-bold in BOTH the Admin and Suvidha rows
+    """
     wb = Workbook()
     ws = wb.active
     ws.title = "Discrepancies"
 
-    position_map = admin.column_position_map
-    if not position_map:
-        raise ReconciliationError("Missing admin column position map for Excel output.")
+    # ── 1. Build filtered column list ────────────────────────────────────────
+    filtered_cols: list[str] = [
+        c for c in admin.columns if not _is_report_excluded_column(c)
+    ]
+    if not filtered_cols:
+        filtered_cols = admin.columns  # safety fallback
 
-    header_fill = "1F4E78"
-    for col_name in admin.columns:
-        col_pos = position_map.get(col_name)
-        if not col_pos:
-            continue
-        excel_col = int(col_pos["excel_col"])
+    # Sequential Excel column mapping:
+    #   col 1 → "Source" label
+    #   col 2 onwards → filtered data columns
+    SOURCE_COL = 1
+    col_to_excel: dict[str, int] = {c: i + 2 for i, c in enumerate(filtered_cols)}
+
+    # Suvidha column lookup: admin_col_name → suvidha_col_name
+    suv_col_lookup: dict[str, str] = {
+        p["admin_col"]: p["suv_col"]
+        for p in result.get("col_pairs", [])
+    }
+
+    # ── 2. Styles ────────────────────────────────────────────────────────────
+    HEADER_FILL   = "1F4E78"
+    ADMIN_BG      = "FFF3EE"   # very light orange tint for admin rows
+    SUVIDHA_BG    = "F0FBF7"   # very light teal tint for suvidha rows
+    ADMIN_SRC_FILL    = "FF8A65"
+    SUVIDHA_SRC_FILL  = "4DD0A4"
+    SEP_FILL      = "E8EAF0"
+
+    red_font = Font(color="C0392B", bold=True, name="Calibri", size=10)
+
+    # ── 3. Header row (row 1) ────────────────────────────────────────────────
+    src_hdr = ws.cell(row=1, column=SOURCE_COL, value="Source")
+    _style_cell(src_hdr, fill_hex=HEADER_FILL, bold=True, color="FFFFFF", align="center")
+    ws.column_dimensions[get_column_letter(SOURCE_COL)].width = 10
+
+    for col_name, excel_col in col_to_excel.items():
         cell = ws.cell(row=1, column=excel_col, value=excel_safe_text(col_name))
-        _style_cell(cell, fill_hex=header_fill, bold=True, color="FFFFFF", align="center", wrap=True)
+        _style_cell(cell, fill_hex=HEADER_FILL, bold=True, color="FFFFFF",
+                    align="center", wrap=True)
+        ws.column_dimensions[get_column_letter(excel_col)].width = min(
+            max(len(excel_safe_text(col_name)) + 6, 14), 45
+        )
 
-    red_font = Font(color="FF0000", bold=True, name="Calibri", size=10)
+    # ── 4. Discrepancy rows ──────────────────────────────────────────────────
     current_row = 2
 
     for disc in result.get("discrepancies", []):
-        key = disc.get("key", "")
-        diffs = disc.get("diffs", {})
+        admin_row: dict[str, str] = disc.get("admin_row", {})
+        suv_row:   dict[str, str] = disc.get("suv_row", {})
+        diffs:     dict[str, Any] = disc.get("diffs", {})
+        diff_set = set(diffs.keys())
 
-        ws.cell(row=current_row, column=1, value=f"Admin - {excel_safe_text(key)}")
-        _style_cell(ws.cell(row=current_row, column=1))
-        for diff_info in diffs.values():
-            excel_col = diff_info.get("excel_col")
-            if not excel_col:
-                continue
-            cell = ws.cell(
-                row=current_row,
-                column=int(excel_col),
-                value=excel_safe_text(diff_info.get("admin", "")),
-            )
-            cell.font = red_font
-            cell.border = _border()
+        # ── Admin data row ────────────────────────────────────────────────
+        src_cell = ws.cell(row=current_row, column=SOURCE_COL, value="Admin")
+        _style_cell(src_cell, fill_hex=ADMIN_SRC_FILL, bold=True,
+                    color="FFFFFF", align="center")
+
+        for col_name, excel_col in col_to_excel.items():
+            val = admin_row.get(col_name, "")
+            cell = ws.cell(row=current_row, column=excel_col,
+                           value=excel_safe_text(val))
+            if col_name in diff_set:
+                cell.font  = red_font
+                cell.fill  = PatternFill("solid", start_color="FDECEA")
+                cell.border = _border()
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            else:
+                _style_cell(cell, fill_hex=ADMIN_BG)
         current_row += 1
 
-        ws.cell(row=current_row, column=1, value=f"Suvidha - {excel_safe_text(key)}")
-        _style_cell(ws.cell(row=current_row, column=1))
-        for diff_info in diffs.values():
-            excel_col = diff_info.get("excel_col")
-            if not excel_col:
-                continue
-            cell = ws.cell(
-                row=current_row,
-                column=int(excel_col),
-                value=excel_safe_text(diff_info.get("suvidha", "")),
-            )
-            cell.font = red_font
-            cell.border = _border()
+        # ── Suvidha data row ──────────────────────────────────────────────
+        src_cell = ws.cell(row=current_row, column=SOURCE_COL, value="Suvidha")
+        _style_cell(src_cell, fill_hex=SUVIDHA_SRC_FILL, bold=True,
+                    color="FFFFFF", align="center")
+
+        for col_name, excel_col in col_to_excel.items():
+            if col_name in diff_set:
+                val = diffs[col_name].get("suvidha", "")
+            else:
+                # Look up value in suvidha row using the mapped suvidha column name
+                suv_col = suv_col_lookup.get(col_name, col_name)
+                val = suv_row.get(suv_col, suv_row.get(col_name, ""))
+            cell = ws.cell(row=current_row, column=excel_col,
+                           value=excel_safe_text(val))
+            if col_name in diff_set:
+                cell.font  = red_font
+                cell.fill  = PatternFill("solid", start_color="E8F8F3")
+                cell.border = _border()
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            else:
+                _style_cell(cell, fill_hex=SUVIDHA_BG)
         current_row += 1
 
-    for col_name in admin.columns:
-        col_pos = position_map.get(col_name)
-        if not col_pos:
-            continue
-        excel_col = int(col_pos["excel_col"])
-        ws.column_dimensions[get_column_letter(excel_col)].width = min(
-            len(excel_safe_text(col_name)) + 10,
-            45,
-        )
+        # ── Thin separator row ────────────────────────────────────────────
+        total_cols = len(filtered_cols) + 1
+        for c in range(1, total_cols + 1):
+            sep = ws.cell(row=current_row, column=c, value="")
+            sep.fill = PatternFill("solid", start_color=SEP_FILL)
+            sep.border = _border()
+        ws.row_dimensions[current_row].height = 4
+        current_row += 1
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -1205,6 +1280,3 @@ if __name__ == "__main__":
     print("\nGrambook Reconciliation Tool")
     print("http://localhost:5000\n")
     app.run(debug=True, port=5000)
-
-
-
