@@ -957,120 +957,148 @@ def generate_discrepancy_report(
     result: dict,
 ) -> io.BytesIO:
     """
-    Build the discrepancy Excel report — FAST.
+    Build the discrepancy Excel report.
 
     Layout
     ------
-    • Col 1   : "Source" label  (Admin / Suvidha)
-    • Col 2+  : all admin columns (serial/no columns excluded)
-
-    For every mismatched record pair:
-      - Only the DIFFERING columns carry values in both the Admin and Suvidha rows.
-      - All other columns are intentionally left BLANK so the reader's eye goes
-        straight to what changed.
-      - Diff cells are highlighted red-bold; blank cells have no fill/border so
-        the file stays small and generates instantly.
+    Sheet 1 — "Discrepancies"  : paired Admin/Suvidha rows for every mismatch
+    Sheet 2 — "Only in Admin"  : rows present only in the Admin file
+    Sheet 3 — "Only in Suvidha": rows present only in the Suvidha file
     """
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Discrepancies"
 
-    # ── styles (defined once, reused — not rebuilt per cell) ─────────────────
-    HEADER_FILL      = "1F4E78"
-    ADMIN_SRC_FILL   = "FF8A65"
-    SUVIDHA_SRC_FILL = "4DD0A4"
-    SEP_FILL         = "F0F0F0"
+    # ── shared helpers ────────────────────────────────────────────────────────
+    HEADER_FILL       = "1F4E78"
+    ADMIN_BG          = "FFF3EE"
+    SUVIDHA_BG        = "F0FBF7"
+    ADMIN_SRC_FILL    = "FF8A65"
+    SUVIDHA_SRC_FILL  = "4DD0A4"
+    ONLY_ADMIN_FILL   = "EF9A9A"   # soft red  for "Only in Admin" header
+    ONLY_SUV_FILL     = "80DEEA"   # soft teal for "Only in Suvidha" header
+    SEP_FILL          = "E8EAF0"
+    red_font = Font(color="C0392B", bold=True, name="Calibri", size=10)
 
-    hdr_font   = Font(bold=True, color="FFFFFF", name="Calibri", size=10)
-    hdr_align  = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    src_align  = Alignment(horizontal="center", vertical="center")
-    diff_font  = Font(bold=True, color="C0392B", name="Calibri", size=10)
-    diff_align = Alignment(horizontal="left", vertical="center")
-    thin_side  = Side(style="thin", color="D9D9D9")
-    diff_border = Border(left=thin_side, right=thin_side,
-                         top=thin_side, bottom=thin_side)
-    hdr_fill        = PatternFill("solid", start_color=HEADER_FILL)
-    adm_src_fill    = PatternFill("solid", start_color=ADMIN_SRC_FILL)
-    suv_src_fill    = PatternFill("solid", start_color=SUVIDHA_SRC_FILL)
-    adm_diff_fill   = PatternFill("solid", start_color="FDECEA")
-    suv_diff_fill   = PatternFill("solid", start_color="E8F8F3")
-    sep_fill_obj    = PatternFill("solid", start_color=SEP_FILL)
-
-    # ── column list (exclude serial/number columns) ───────────────────────────
+    # ── 1. Build filtered column list ─────────────────────────────────────────
     filtered_cols: list[str] = [
         c for c in admin.columns if not _is_report_excluded_column(c)
-    ] or admin.columns
+    ]
+    if not filtered_cols:
+        filtered_cols = admin.columns
 
     SOURCE_COL = 1
-    # col_to_excel: admin column name → Excel column number (1-based, offset by Source col)
     col_to_excel: dict[str, int] = {c: i + 2 for i, c in enumerate(filtered_cols)}
 
-    # ── header row ────────────────────────────────────────────────────────────
-    src_hdr = ws.cell(row=1, column=SOURCE_COL, value="Source")
-    src_hdr.font   = hdr_font
-    src_hdr.fill   = hdr_fill
-    src_hdr.alignment = hdr_align
-    ws.column_dimensions[get_column_letter(SOURCE_COL)].width = 10
+    suv_col_lookup: dict[str, str] = {
+        p["admin_col"]: p["suv_col"]
+        for p in result.get("col_pairs", [])
+    }
 
-    for col_name, excel_col in col_to_excel.items():
-        cell = ws.cell(row=1, column=excel_col, value=excel_safe_text(col_name))
-        cell.font      = hdr_font
-        cell.fill      = hdr_fill
-        cell.alignment = hdr_align
-        ws.column_dimensions[get_column_letter(excel_col)].width = min(
-            max(len(excel_safe_text(col_name)) + 4, 12), 40
-        )
+    def _write_header_row(ws, cols: list[str], fill: str) -> None:
+        src_hdr = ws.cell(row=1, column=SOURCE_COL, value="Source")
+        _style_cell(src_hdr, fill_hex=fill, bold=True, color="FFFFFF", align="center")
+        ws.column_dimensions[get_column_letter(SOURCE_COL)].width = 10
+        for col_name, excel_col in {c: i + 2 for i, c in enumerate(cols)}.items():
+            cell = ws.cell(row=1, column=excel_col, value=excel_safe_text(col_name))
+            _style_cell(cell, fill_hex=fill, bold=True, color="FFFFFF",
+                        align="center", wrap=True)
+            ws.column_dimensions[get_column_letter(excel_col)].width = min(
+                max(len(excel_safe_text(col_name)) + 6, 14), 45
+            )
 
-    # ── discrepancy rows ──────────────────────────────────────────────────────
+    def _write_simple_header(ws, cols: list[str], fill: str) -> None:
+        """Header row without a Source column — used for only-in-X sheets."""
+        for i, col_name in enumerate(cols, start=1):
+            cell = ws.cell(row=1, column=i, value=excel_safe_text(col_name))
+            _style_cell(cell, fill_hex=fill, bold=True, color="FFFFFF",
+                        align="center", wrap=True)
+            ws.column_dimensions[get_column_letter(i)].width = min(
+                max(len(excel_safe_text(col_name)) + 6, 14), 45
+            )
+
+    # ── 2. Sheet 1 — Discrepancies ────────────────────────────────────────────
+    ws_disc = wb.active
+    ws_disc.title = "Discrepancies"
+
+    _write_header_row(ws_disc, filtered_cols, HEADER_FILL)
     current_row = 2
 
     for disc in result.get("discrepancies", []):
-        diffs:    dict[str, Any] = disc.get("diffs", {})
-        diff_set: set[str]       = set(diffs.keys())
+        admin_row: dict[str, str] = disc.get("admin_row", {})
+        suv_row:   dict[str, str] = disc.get("suv_row", {})
+        diffs:     dict[str, Any] = disc.get("diffs", {})
+        diff_set = set(diffs.keys())
 
-        # ── Admin row ─────────────────────────────────────────────────────────
-        src_a = ws.cell(row=current_row, column=SOURCE_COL, value="Admin")
-        src_a.font      = Font(bold=True, color="FFFFFF", name="Calibri", size=10)
-        src_a.fill      = adm_src_fill
-        src_a.alignment = src_align
-
+        # Admin data row
+        src_cell = ws_disc.cell(row=current_row, column=SOURCE_COL, value="Admin")
+        _style_cell(src_cell, fill_hex=ADMIN_SRC_FILL, bold=True,
+                    color="FFFFFF", align="center")
         for col_name, excel_col in col_to_excel.items():
-            if col_name not in diff_set:
-                # Leave blank — do NOT write value, do NOT apply fill/border
-                continue
-            val  = diffs[col_name].get("admin", "")
-            cell = ws.cell(row=current_row, column=excel_col,
-                           value=excel_safe_text(val))
-            cell.font      = diff_font
-            cell.fill      = adm_diff_fill
-            cell.border    = diff_border
-            cell.alignment = diff_align
+            val = admin_row.get(col_name, "")
+            cell = ws_disc.cell(row=current_row, column=excel_col,
+                                value=excel_safe_text(val))
+            if col_name in diff_set:
+                cell.font  = red_font
+                cell.fill  = PatternFill("solid", start_color="FDECEA")
+                cell.border = _border()
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            else:
+                _style_cell(cell, fill_hex=ADMIN_BG)
         current_row += 1
 
-        # ── Suvidha row ───────────────────────────────────────────────────────
-        src_s = ws.cell(row=current_row, column=SOURCE_COL, value="Suvidha")
-        src_s.font      = Font(bold=True, color="FFFFFF", name="Calibri", size=10)
-        src_s.fill      = suv_src_fill
-        src_s.alignment = src_align
-
+        # Suvidha data row
+        src_cell = ws_disc.cell(row=current_row, column=SOURCE_COL, value="Suvidha")
+        _style_cell(src_cell, fill_hex=SUVIDHA_SRC_FILL, bold=True,
+                    color="FFFFFF", align="center")
         for col_name, excel_col in col_to_excel.items():
-            if col_name not in diff_set:
-                # Leave blank — do NOT write value, do NOT apply fill/border
-                continue
-            val  = diffs[col_name].get("suvidha", "")
-            cell = ws.cell(row=current_row, column=excel_col,
-                           value=excel_safe_text(val))
-            cell.font      = diff_font
-            cell.fill      = suv_diff_fill
-            cell.border    = diff_border
-            cell.alignment = diff_align
+            if col_name in diff_set:
+                val = diffs[col_name].get("suvidha", "")
+            else:
+                suv_col = suv_col_lookup.get(col_name, col_name)
+                val = suv_row.get(suv_col, suv_row.get(col_name, ""))
+            cell = ws_disc.cell(row=current_row, column=excel_col,
+                                value=excel_safe_text(val))
+            if col_name in diff_set:
+                cell.font  = red_font
+                cell.fill  = PatternFill("solid", start_color="E8F8F3")
+                cell.border = _border()
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            else:
+                _style_cell(cell, fill_hex=SUVIDHA_BG)
         current_row += 1
 
-        # ── thin separator (only Source col coloured, rest plain) ─────────────
-        sep = ws.cell(row=current_row, column=SOURCE_COL, value="")
-        sep.fill = sep_fill_obj
-        ws.row_dimensions[current_row].height = 3
+        # Thin separator row
+        total_cols = len(filtered_cols) + 1
+        for c in range(1, total_cols + 1):
+            sep = ws_disc.cell(row=current_row, column=c, value="")
+            sep.fill = PatternFill("solid", start_color=SEP_FILL)
+            sep.border = _border()
+        ws_disc.row_dimensions[current_row].height = 4
         current_row += 1
+
+    # ── 3. Sheet 2 — Only in Admin ────────────────────────────────────────────
+    # FIX (High): "Only in Admin" and "Only in Suvidha" rows are now included
+    # in the downloaded report. Previously these sections were completely missing.
+    only_admin_rows: list[dict] = result.get("only_admin_rows", [])
+    ws_oa = wb.create_sheet(title="Only in Admin")
+    _write_simple_header(ws_oa, filtered_cols, ONLY_ADMIN_FILL)
+    for row_idx, row in enumerate(only_admin_rows, start=2):
+        for col_idx, col_name in enumerate(filtered_cols, start=1):
+            cell = ws_oa.cell(row=row_idx, column=col_idx,
+                              value=excel_safe_text(row.get(col_name, "")))
+            _style_cell(cell, fill_hex="FFEBEE")
+
+    # ── 4. Sheet 3 — Only in Suvidha ─────────────────────────────────────────
+    only_suv_rows: list[dict] = result.get("only_suv_rows", [])
+    suv_cols: list[str] = result.get("suv_cols", filtered_cols)
+    # Use suvidha's own column names for this sheet
+    suv_filtered_cols = [c for c in suv_cols if not _is_report_excluded_column(c)] or suv_cols
+    ws_os = wb.create_sheet(title="Only in Suvidha")
+    _write_simple_header(ws_os, suv_filtered_cols, ONLY_SUV_FILL)
+    for row_idx, row in enumerate(only_suv_rows, start=2):
+        for col_idx, col_name in enumerate(suv_filtered_cols, start=1):
+            cell = ws_os.cell(row=row_idx, column=col_idx,
+                              value=excel_safe_text(row.get(col_name, "")))
+            _style_cell(cell, fill_hex="E0F7FA")
 
     buf = io.BytesIO()
     wb.save(buf)
