@@ -166,6 +166,24 @@ _configure_tesseract()
 # ──────────────────────────────────────────────────────────────────────────────
 # Text normalisation helpers
 # ──────────────────────────────────────────────────────────────────────────────
+import re
+
+def excel_clean_text(text):
+    if not text:
+        return ""
+    
+    text = str(text)
+
+    # 🔥 Remove new lines (main fix)
+    text = text.replace("\n", " ").replace("\r", " ")
+
+    # 🔥 Remove numbering like 1. 2. 3. (optional but recommended)
+    text = re.sub(r"\d+\.", "", text)
+
+    # 🔥 Normalize spaces
+    text = " ".join(text.split())
+
+    return text
 
 def canonical_text(value: Any) -> str:
     text = "" if value is None else str(value)
@@ -950,9 +968,9 @@ def generate_discrepancy_report(
     ws = wb.active
     ws.title = "Discrepancies"
 
-    # 🔥 FIX: Create NEW column mapping (do NOT use original excel_col)
+    # 🔥 Clean column mapping
     new_col_map = {
-        col: idx + 2  # column 1 reserved for key
+        col: idx + 2
         for idx, col in enumerate(admin.columns)
     }
 
@@ -960,8 +978,15 @@ def generate_discrepancy_report(
     ws.cell(row=1, column=1, value="Name")
 
     for col, col_idx in new_col_map.items():
-        cell = ws.cell(row=1, column=col_idx, value=excel_safe_text(col))
-        _style_cell(cell, fill_hex="1F4E78", bold=True, color="FFFFFF", align="center", wrap=True)
+        cell = ws.cell(row=1, column=col_idx, value=excel_clean_text(col))
+        _style_cell(
+            cell,
+            fill_hex="1F4E78",
+            bold=True,
+            color="FFFFFF",
+            align="center",
+            wrap=False  # 🔥 FIXED
+        )
 
     red_font = Font(color="FF0000", bold=True, name="Calibri", size=10)
 
@@ -973,7 +998,7 @@ def generate_discrepancy_report(
         diffs = disc.get("diffs", {})
 
         # 🔴 Admin row
-        ws.cell(row=current_row, column=1, value=f"Admin - {excel_safe_text(key)}")
+        ws.cell(row=current_row, column=1, value=f"Admin - {excel_clean_text(key)}")
 
         for col_name, diff in diffs.items():
             col_idx = new_col_map.get(col_name)
@@ -983,14 +1008,14 @@ def generate_discrepancy_report(
             cell = ws.cell(
                 row=current_row,
                 column=col_idx,
-                value=excel_safe_text(diff.get("admin", "")),
+                value=excel_clean_text(diff.get("admin", "")),  # 🔥 FIXED
             )
             cell.font = red_font
 
         current_row += 1
 
         # 🔴 Suvidha row
-        ws.cell(row=current_row, column=1, value=f"Suvidha - {excel_safe_text(key)}")
+        ws.cell(row=current_row, column=1, value=f"Suvidha - {excel_clean_text(key)}")
 
         for col_name, diff in diffs.items():
             col_idx = new_col_map.get(col_name)
@@ -1000,22 +1025,34 @@ def generate_discrepancy_report(
             cell = ws.cell(
                 row=current_row,
                 column=col_idx,
-                value=excel_safe_text(diff.get("suvidha", "")),
+                value=excel_clean_text(diff.get("suvidha", "")),  # 🔥 FIXED
             )
             cell.font = red_font
 
         current_row += 1
 
-    # ================= WIDTH FIX =================
+    # ================= ALIGNMENT =================
     from openpyxl.styles import Alignment
+    from openpyxl.utils import get_column_letter
 
-    for col_idx in range(1, len(admin.columns) + 2):
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(
+                wrap_text=False,
+                vertical="center",
+                horizontal="left"
+            )
+
+    # ================= ROW HEIGHT =================
+    for r in range(1, ws.max_row + 1):
+        ws.row_dimensions[r].height = 20
+
+    # ================= COLUMN WIDTH =================
+    ws.column_dimensions["A"].width = 45  # Name column
+
+    for col_idx in range(2, len(admin.columns) + 2):  # 🔥 FIXED (start from 2)
         col_letter = get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = 35
-
-        for row in ws.iter_rows(min_col=col_idx, max_col=col_idx):
-            for cell in row:
-                cell.alignment = Alignment(wrap_text=True, vertical="top")
 
     # ================= SAVE =================
     buf = io.BytesIO()
