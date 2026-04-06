@@ -278,12 +278,8 @@ def canonical_compare_value(value: Any) -> str:
 
 
 def normalize_key_value(value: Any) -> str:
-    """Normalize a key column value for fuzzy matching."""
-    text = canonical_text(value).lower()
-    text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
-    text = text.replace("_", " ")
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    """Conservative key normalization for audit-safe matching."""
+    return canonical_text(value)
 
 
 def _is_zero_or_blank(value: Any) -> bool:
@@ -294,8 +290,6 @@ def _is_zero_or_blank(value: Any) -> bool:
 
 
 def values_equivalent_for_compare(left: Any, right: Any) -> bool:
-    if _is_zero_or_blank(left) and _is_zero_or_blank(right):
-        return True
     return canonical_compare_value(left) == canonical_compare_value(right)
 
 
@@ -528,45 +522,8 @@ def detect_header_start(
             )
         return idx, None
 
-    max_scan = min(60, len(matrix))
-    scored = []
-    for i in range(max_scan):
-        score = _row_header_score(matrix[i])
-        if score < 0:
-            continue
-        non_empty = [x for x in matrix[i] if x]
-        if len(non_empty) < 2:
-            continue
-        text_ratio = sum(1 for x in non_empty if not is_numeric_like(x)) / len(
-            non_empty
-        )
-        if text_ratio < 0.55:
-            continue
-        if any(len(x) > 140 for x in non_empty):
-            continue
-        scored.append((i, score))
-
-    if not scored:
-        raise ReconciliationError(
-            "Could not detect a valid header row. "
-            "Please use the manual header row override."
-        )
-
-    scored.sort(key=lambda x: x[1], reverse=True)
-    best_idx = scored[0][0]
-
-    if _is_sub_header_row(matrix[best_idx]) and best_idx > 0:
-        prev = matrix[best_idx - 1]
-        prev_non_empty = [x for x in prev if x]
-        if (
-            prev_non_empty
-            and sum(1 for x in prev_non_empty if not is_numeric_like(x))
-            / len(prev_non_empty)
-            >= 0.9
-        ):
-            return best_idx - 1, 2
-
-    return best_idx, None
+    # Production default: first row is header unless explicitly overridden.
+    return 0, None
 
 
 def _forward_fill_header_cells(row: list[str]) -> list[str]:
@@ -659,77 +616,13 @@ def build_headers(
             "Header row is at the very end of the file — no data rows follow."
         )
 
-    if forced_span is not None and manual_header_span is None:
+    if manual_header_span in (1, 2, 3, 4, 5):
+        chosen_span = manual_header_span
+    elif forced_span is not None and forced_span > 0:
         chosen_span = forced_span
     else:
-        spans = (
-            [manual_header_span]
-            if manual_header_span in (1, 2, 3, 4, 5)
-            else [5, 4, 3, 2, 1]
-        )
+        # Production default: single-row header unless explicitly overridden.
         chosen_span = 1
-        best_score = -1.0
-
-        for span in spans:
-            if header_start + span > len(matrix):
-                continue
-            # FIX: Don't access local_rows[r] beyond its actual length
-            if span > len(local_rows):
-                continue
-            combined = []
-            for c in range(max_cols):
-                parts = _dedupe_in_order(
-                    [
-                        local_rows[r][c]
-                        for r in range(span)
-                        if r < len(local_rows) and local_rows[r][c]
-                    ]
-                )
-                combined.append(" ".join(parts).strip())
-
-            non_empty = sum(1 for h in combined if h)
-            score = non_empty - sum(1 for h in combined if len(h) > 90) * 1.5
-
-            multi_header_bonus = 0
-            for row_idx in range(span):
-                if row_idx >= len(local_rows):
-                    break
-                row_text = " ".join(local_rows[row_idx]).lower()
-                if any(
-                    k in row_text
-                    for k in [
-                        "baki",
-                        "test",
-                        "type",
-                        "category",
-                        "status",
-                        "remark",
-                        "sr no",
-                        "serial",
-                        "બાકી",
-                        "ચાલુ",
-                        "કુલ",
-                    ]
-                ):
-                    multi_header_bonus += 2
-                if any(
-                    k in row_text
-                    for k in [
-                        "no",
-                        "number",
-                        "id",
-                        "code",
-                        "name",
-                        "ક્રમ",
-                        "નંબર",
-                    ]
-                ):
-                    multi_header_bonus += 1
-            score += multi_header_bonus
-
-            if score > best_score:
-                best_score = score
-                chosen_span = span
 
     header_rows = local_rows[:chosen_span]
     raw_headers: list[str] = []
@@ -777,11 +670,6 @@ def _align_row(row: list[str], target_cols: int) -> list[str]:
         r += [""] * (target_cols - len(r))
     elif len(r) > target_cols:
         r = r[:target_cols]
-    first_non_empty = next((i for i, v in enumerate(r) if canonical_text(v)), None)
-    if first_non_empty is not None and first_non_empty > 0:
-        trailing_empty = all(not canonical_text(x) for x in r[-first_non_empty:])
-        if trailing_empty:
-            r = r[first_non_empty:] + [""] * first_non_empty
     return r
 
 
@@ -812,6 +700,24 @@ def dataframe_from_matrix(
         raise ReconciliationError("No usable columns detected after header processing.")
 
     data_rows = matrix[header_start + header_span :]
+
+    # Safety fallback: if auto span consumed all rows as "header",
+    # retry with a single header row.
+    if (
+        manual_header_span is None
+        and forced_span is None
+        and not data_rows
+        and (header_start + 1) < len(matrix)
+        and header_span > 1
+    ):
+        headers, normalized_map, drop_indices, header_span = build_headers(
+            matrix,
+            header_start,
+            manual_header_span=1,
+            forced_span=forced_span,
+        )
+        kept_indices = [i for i in range(max_cols) if i not in set(drop_indices)]
+        data_rows = matrix[header_start + header_span :]
     aligned_rows: list[list[str]] = []
     excel_row_numbers: list[int] = []
     row_position_map: dict[int, int] = {}
@@ -923,20 +829,24 @@ def map_columns_smart(
             mapped.append((ac, sc, 1.0))
             used_suv.add(sc)
 
-    # Pass 2 — fuzzy match (>= 85 % similarity)
+    # Pass 2 — stricter fuzzy match (>= 92 % with clear winner margin)
     for ac in admin_candidates:
         if any(x[0] == ac for x in mapped):
             continue
         best_sc, best_score = None, 0.0
+        second_best = 0.0
         na = normalize_column_key(ac)
         for sc in suv_candidates:
             if sc in used_suv:
                 continue
             score = _similarity(na, normalize_column_key(sc))
             if score > best_score:
+                second_best = best_score
                 best_score = score
                 best_sc = sc
-        if best_sc and best_score >= 0.85:
+            elif score > second_best:
+                second_best = score
+        if best_sc and best_score >= 0.92 and (best_score - second_best) >= 0.03:
             mapped.append((ac, best_sc, best_score))
             used_suv.add(best_sc)
 
@@ -972,8 +882,9 @@ def reconcile(
     suv: ParsedDataset,
     admin_key: str,
     suv_key: str,
+    debug_mode: bool = False,
 ) -> dict[str, Any]:
-    """Core reconciliation logic."""
+    """Core reconciliation logic (mismatch-only, row-to-row, no aggregation)."""
 
     def _decimal_from_value(value: Any) -> Decimal | None:
         num = canonical_numeric_text(value)
@@ -985,86 +896,38 @@ def reconcile(
             return None
 
     def _decimal_to_text(value: Decimal) -> str:
-        text = format(value.normalize(), "f").rstrip("0").rstrip(".")
+        text = format(value.normalize(), "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
         return "0" if not text or text == "-0" else text
 
-    def _detect_numeric_columns(
-        rows: list[dict[str, str]], columns: list[str], key_col: str
-    ) -> set[str]:
-        hints = (
-            "amount",
-            "tax",
-            "total",
-            "balance",
-            "baki",
-            "paid",
-            "due",
-            "fee",
-            "debit",
-            "credit",
-        )
-        numeric_cols: set[str] = set()
-        for col in columns:
-            if col == key_col:
-                continue
-            nk = normalize_column_key(col)
-            if any(h in nk for h in hints):
-                numeric_cols.add(col)
-                continue
-            sample = [
-                canonical_text(r.get(col, ""))
-                for r in rows
-                if canonical_text(r.get(col, ""))
-            ]
-            if not sample:
-                continue
-            numeric_count = sum(1 for v in sample if _decimal_from_value(v) is not None)
-            if (numeric_count / len(sample)) >= 0.8:
-                numeric_cols.add(col)
-        return numeric_cols
+    def _values_different(left: Any, right: Any) -> tuple[bool, str, str, str, bool]:
+        left_txt = canonical_text(left)
+        right_txt = canonical_text(right)
+        left_dec = _decimal_from_value(left_txt) if left_txt else None
+        right_dec = _decimal_from_value(right_txt) if right_txt else None
 
-    def _aggregate_group(
-        entries: list[dict[str, Any]],
-        columns: list[str],
-        numeric_columns: set[str],
-    ) -> dict[str, Any]:
-        agg_row: dict[str, str] = {}
-        numeric_totals: dict[str, Decimal] = {}
-        for col in columns:
-            values = [e["row"].get(col, "") for e in entries]
-            if col in numeric_columns:
-                total = Decimal("0")
-                found = False
-                for value in values:
-                    dec = _decimal_from_value(value)
-                    if dec is not None:
-                        total += dec
-                        found = True
-                if found:
-                    agg_row[col] = _decimal_to_text(total)
-                    numeric_totals[col] = total
-                else:
-                    agg_row[col] = ""
-            else:
-                chosen = ""
-                for value in values:
-                    txt = canonical_text(value)
-                    if txt:
-                        chosen = txt
-                        break
-                agg_row[col] = chosen
-        return {
-            "row": agg_row,
-            "numeric_totals": numeric_totals,
-            "display_key": next(
-                (e["display_key"] for e in entries if e.get("display_key")), ""
-            ),
-            "df_row_index": entries[0]["df_row_index"] if entries else -1,
-            "excel_rows": [
-                e["excel_row"] for e in entries if e.get("excel_row", -1) > 0
-            ],
-            "count": len(entries),
-        }
+        # Numeric compare only when both are numeric. Blank is never equal to zero.
+        if left_dec is not None and right_dec is not None:
+            if left_dec == right_dec:
+                return (
+                    False,
+                    _decimal_to_text(left_dec),
+                    _decimal_to_text(right_dec),
+                    "",
+                    True,
+                )
+            return (
+                True,
+                _decimal_to_text(left_dec),
+                _decimal_to_text(right_dec),
+                _decimal_to_text(left_dec - right_dec),
+                True,
+            )
+
+        if left_txt == right_txt:
+            return False, left_txt, right_txt, "", False
+        return True, left_txt, right_txt, "", False
 
     admin_idx, admin_missing_keys = _build_key_index(
         admin.rows, admin_key, admin.row_position_map
@@ -1074,157 +937,260 @@ def reconcile(
     )
 
     col_pairs = map_columns_smart(admin.columns, suv.columns, admin_key, suv_key)
+    if not col_pairs:
+        raise ReconciliationError(
+            "No reliable column mappings found between Admin and Suvidha."
+        )
     pair_lookup = {a: s for a, s, _ in col_pairs}
 
-    admin_numeric_cols = _detect_numeric_columns(admin.rows, admin.columns, admin_key)
-    suv_numeric_cols = _detect_numeric_columns(suv.rows, suv.columns, suv_key)
-    identifier_columns = [
-        c
-        for c in admin.columns
-        if c == admin_key
-        or normalize_column_key(c)
-        in ("name", "naam", "id", "code", "account", "acc", "member")
+    priority_tokens = ("tax", "amount", "baki", "balance")
+    focused_pairs = [
+        (a, s, c)
+        for a, s, c in col_pairs
+        if any(
+            t in normalize_column_key(a) or t in normalize_column_key(s)
+            for t in priority_tokens
+        )
     ]
+    if focused_pairs:
+        focused_admin_cols = {a for a, _, _ in focused_pairs}
+        compare_pairs = focused_pairs + [
+            pair for pair in col_pairs if pair[0] not in focused_admin_cols
+        ]
+    else:
+        compare_pairs = col_pairs
 
     admin_keys = set(admin_idx)
     suv_keys = set(suv_idx)
-    common = admin_keys & suv_keys
-    only_admin_keys = admin_keys - suv_keys
-    only_suv_keys = suv_keys - admin_keys
-
+    only_admin_rows: list[dict[str, str]] = []
+    only_suv_rows: list[dict[str, str]] = []
     discrepancies: list[dict[str, Any]] = []
     mismatch_details: list[dict[str, Any]] = []
     matching_records = 0
     duplicate_key_conflicts: list[dict[str, Any]] = []
+    strict_mismatch_count = 0
+    hidden_mismatches = 0
+    hidden_mismatch_samples: list[dict[str, Any]] = []
 
-    for key in sorted(common):
-        a_rows = admin_idx[key]
-        s_rows = suv_idx[key]
+    matched_key_pairs: list[tuple[str, str, float, str]] = []
+    used_suv_keys: set[str] = set()
+
+    # Exact key matches first (fast path).
+    for a_key in admin_idx.keys():
+        if a_key in suv_idx:
+            matched_key_pairs.append((a_key, a_key, 1.0, "exact"))
+            used_suv_keys.add(a_key)
+
+    # Fuzzy key fallback for remaining keys (>= 90%).
+    remaining_suv_keys = [k for k in suv_idx.keys() if k not in used_suv_keys]
+    for a_key in admin_idx.keys():
+        if a_key in suv_idx:
+            continue
+        best_key = ""
+        best_score = 0.0
+        second_best = 0.0
+        for s_key in remaining_suv_keys:
+            score = _similarity(a_key, s_key)
+            if score > best_score:
+                second_best = best_score
+                best_score = score
+                best_key = s_key
+            elif score > second_best:
+                second_best = score
+        if best_key and best_score >= 0.90 and (best_score - second_best) >= 0.03:
+            matched_key_pairs.append((a_key, best_key, best_score, "fuzzy"))
+            used_suv_keys.add(best_key)
+            remaining_suv_keys = [k for k in remaining_suv_keys if k != best_key]
+
+    def _record_mismatch(
+        a_item: dict[str, Any] | None,
+        s_item: dict[str, Any] | None,
+        normalized_key: str,
+        key_confidence: float,
+        key_match_type: str,
+    ) -> bool:
+        nonlocal strict_mismatch_count, hidden_mismatches
+        admin_row = a_item["row"] if a_item else {}
+        suv_row = s_item["row"] if s_item else {}
+            mismatch_map: dict[str, Any] = {}
+        id_display = ""
+        if a_item and a_item.get("display_key"):
+            id_display = a_item["display_key"]
+        elif s_item and s_item.get("display_key"):
+            id_display = s_item["display_key"]
+        else:
+            id_display = normalized_key
+
+        for ac, sc, col_conf in compare_pairs:
+            left_val = admin_row.get(ac, "")
+            right_val = suv_row.get(sc, "")
+            left_raw = canonical_text(left_val)
+            right_raw = canonical_text(right_val)
+            strict_changed = left_raw != right_raw
+            if strict_changed:
+                strict_mismatch_count += 1
+            changed, left_fmt, right_fmt, diff_text, is_numeric = _values_different(
+                left_val, right_val
+            )
+            if strict_changed and not changed:
+                hidden_mismatches += 1
+                if len(hidden_mismatch_samples) < 25:
+                    hidden_mismatch_samples.append(
+                        {
+                            "id": id_display,
+                            "column": ac,
+                            "suvidha_column": sc,
+                            "admin_raw": left_raw,
+                            "suvidha_raw": right_raw,
+                            "reason": "raw_unequal_but_treated_equal",
+                        }
+                    )
+            if not changed:
+                continue
+            mismatch_map[ac] = {
+                "admin": left_fmt,
+                "suvidha": right_fmt,
+                "difference": diff_text,
+                "is_numeric": is_numeric,
+                "suv_col": sc,
+                "column_confidence": round(col_conf, 4),
+            }
+
+        if not mismatch_map:
+            return False
+
+        admin_excel_rows = (
+            [a_item["excel_row"]] if a_item and a_item.get("excel_row", -1) > 0 else []
+        )
+        suv_excel_rows = (
+            [s_item["excel_row"]] if s_item and s_item.get("excel_row", -1) > 0 else []
+        )
+        discrepancies.append(
+            {
+                "id": id_display,
+                "normalized_id": normalized_key,
+                "admin_excel_rows": admin_excel_rows,
+                "suvidha_excel_rows": suv_excel_rows,
+                "admin_count": 1 if a_item else 0,
+                "suvidha_count": 1 if s_item else 0,
+                "changed_columns": list(mismatch_map.keys()),
+                "mismatch_count": len(mismatch_map),
+                "key_match_type": key_match_type,
+                "key_confidence": round(key_confidence, 4),
+                "mismatches": mismatch_map,
+            }
+        )
+        for admin_col, diff in mismatch_map.items():
+            mismatch_details.append(
+                {
+                    "id": id_display,
+                    "normalized_id": normalized_key,
+                    "column": admin_col,
+                    "suvidha_column": diff.get("suv_col", admin_col),
+                    "admin_value": diff.get("admin", ""),
+                    "suvidha_value": diff.get("suvidha", ""),
+                    "difference": diff.get("difference", ""),
+                    "is_numeric": bool(diff.get("is_numeric")),
+                    "admin_excel_rows": admin_excel_rows,
+                    "suvidha_excel_rows": suv_excel_rows,
+                    "key_match_type": key_match_type,
+                    "key_confidence": round(key_confidence, 4),
+                }
+            )
+        return True
+
+    processed_admin_keys: set[str] = set()
+    processed_suv_keys: set[str] = set()
+
+    for a_key, s_key, key_conf, match_type in matched_key_pairs:
+        processed_admin_keys.add(a_key)
+        processed_suv_keys.add(s_key)
+        a_rows = admin_idx.get(a_key, [])
+        s_rows = suv_idx.get(s_key, [])
 
         if len(a_rows) != 1 or len(s_rows) != 1:
             duplicate_key_conflicts.append(
                 {
-                    "key": key,
+                    "admin_key": a_key,
+                    "suvidha_key": s_key,
                     "admin_count": len(a_rows),
                     "suvidha_count": len(s_rows),
+                    "match_type": match_type,
+                    "key_confidence": round(key_conf, 4),
                 }
             )
 
-        a_agg = _aggregate_group(a_rows, admin.columns, admin_numeric_cols)
-        s_agg = _aggregate_group(s_rows, suv.columns, suv_numeric_cols)
-        a = a_agg["row"]
-        s = s_agg["row"]
-        diffs: dict[str, Any] = {}
-
-        for ac, sc, confidence in col_pairs:
-            is_numeric = ac in admin_numeric_cols or sc in suv_numeric_cols
-            # FIX: Use .get() with a safe default instead of dict.index() which doesn't exist
-            position = admin.column_position_map.get(
-                ac,
-                {
-                    "df_index": admin.columns.index(ac) if ac in admin.columns else 0,
-                    "excel_col": (admin.columns.index(ac) + 1)
-                    if ac in admin.columns
-                    else 1,
-                },
+        pair_count = min(len(a_rows), len(s_rows))
+        for i in range(pair_count):
+            changed = _record_mismatch(
+                a_rows[i], s_rows[i], a_key, key_conf, match_type
             )
-            if is_numeric:
-                a_total = a_agg["numeric_totals"].get(ac, Decimal("0"))
-                s_total = s_agg["numeric_totals"].get(sc, Decimal("0"))
-                if a_total != s_total:
-                    diffs[ac] = {
-                        "admin": _decimal_to_text(a_total),
-                        "suvidha": _decimal_to_text(s_total),
-                        "difference": _decimal_to_text(a_total - s_total),
-                        "is_numeric": True,
-                        "suv_col": sc,
-                        "confidence": round(confidence, 4),
-                        "df_index": position["df_index"],
-                        "excel_col": position["excel_col"],
-                    }
-            else:
-                av = canonical_text(a.get(ac, ""))
-                sv = canonical_text(s.get(sc, ""))
-                if not values_equivalent_for_compare(av, sv):
-                    diffs[ac] = {
-                        "admin": av,
-                        "suvidha": sv,
-                        "difference": "",
-                        "is_numeric": False,
-                        "suv_col": sc,
-                        "confidence": round(confidence, 4),
-                        "df_index": position["df_index"],
-                        "excel_col": position["excel_col"],
-                    }
+            if not changed:
+                matching_records += 1
 
-        if diffs:
-            display_key = a_agg["display_key"] or s_agg["display_key"] or key
-            discrepancies.append(
-                {
-                    "id": display_key,
-                    "normalized_id": key,
-                    "admin_excel_rows": a_agg["excel_rows"],
-                    "suvidha_excel_rows": s_agg["excel_rows"],
-                    "admin_count": a_agg["count"],
-                    "suvidha_count": s_agg["count"],
-                    "changed_columns": sorted(diffs.keys()),
-                    "mismatch_count": len(diffs),
-                }
-            )
-            for admin_col, diff in diffs.items():
-                mismatch_details.append(
-                    {
-                        "id": display_key,
-                        "normalized_id": key,
-                        "column": admin_col,
-                        "suvidha_column": diff.get("suv_col", admin_col),
-                        "admin_value": diff.get("admin", ""),
-                        "suvidha_value": diff.get("suvidha", ""),
-                        "difference": diff.get("difference", ""),
-                        "is_numeric": bool(diff.get("is_numeric")),
-                        "admin_excel_rows": a_agg["excel_rows"],
-                        "suvidha_excel_rows": s_agg["excel_rows"],
-                    }
-                )
-        else:
-            matching_records += 1
+        for extra in a_rows[pair_count:]:
+            only_admin_rows.append(extra["row"])
+            _record_mismatch(extra, None, a_key, key_conf, match_type)
+        for extra in s_rows[pair_count:]:
+            only_suv_rows.append(extra["row"])
+            _record_mismatch(None, extra, s_key, key_conf, match_type)
 
-    only_admin_rows = [
-        item["row"] for k in sorted(only_admin_keys) for item in admin_idx[k]
-    ]
-    only_suv_rows = [item["row"] for k in sorted(only_suv_keys) for item in suv_idx[k]]
-    mismatch_details.sort(
-        key=lambda item: (
-            canonical_text(item.get("normalized_id", "")),
-            canonical_text(item.get("column", "")),
-        )
+    for a_key, a_rows in admin_idx.items():
+        if a_key in processed_admin_keys:
+            continue
+        for item in a_rows:
+            only_admin_rows.append(item["row"])
+            _record_mismatch(item, None, a_key, 1.0, "unmatched")
+
+    for s_key, s_rows in suv_idx.items():
+        if s_key in processed_suv_keys:
+            continue
+        for item in s_rows:
+            only_suv_rows.append(item["row"])
+            _record_mismatch(None, item, s_key, 1.0, "unmatched")
+
+    debug_info = {
+        "total_keys": len(admin_keys | suv_keys),
+        "matched_keys": len(matched_key_pairs),
+        "discrepancy_count": len(discrepancies),
+        "strict_mismatch_count": strict_mismatch_count,
+        "hidden_mismatches": hidden_mismatches,
+        "hidden_mismatch_samples": hidden_mismatch_samples,
+    }
+    logger.info(
+        "Reconcile stats: total_keys=%d matched_keys=%d discrepancy_count=%d strict_mismatch_count=%d hidden_mismatches=%d",
+        debug_info["total_keys"],
+        debug_info["matched_keys"],
+        debug_info["discrepancy_count"],
+        debug_info["strict_mismatch_count"],
+        debug_info["hidden_mismatches"],
     )
+    if hidden_mismatch_samples:
+        logger.info("Hidden mismatch samples: %s", hidden_mismatch_samples[:5])
 
-    return {
+    out = {
         "discrepancies": discrepancies,
         "mismatch_details": mismatch_details,
         "only_admin_rows": only_admin_rows,
         "only_suv_rows": only_suv_rows,
         "col_pairs": [
             {"admin_col": a, "suv_col": s, "confidence": round(c, 4)}
-            for a, s, c in col_pairs
+            for a, s, c in compare_pairs
         ],
         "admin_key": admin_key,
         "suv_key": suv_key,
-        "admin_cols": admin.columns,
-        "suv_cols": suv.columns,
+        "admin_cols": [a for a, _, _ in compare_pairs],
+        "suv_cols": [s for _, s, _ in compare_pairs],
         "admin_column_position_map": admin.column_position_map,
         "meta": {
-            "compared_keys": len(common),
+            "compared_keys": len(matched_key_pairs),
             "duplicate_key_conflicts": duplicate_key_conflicts,
             "admin_missing_keys": admin_missing_keys,
             "suvidha_missing_keys": suv_missing_keys,
-            "identifier_columns": identifier_columns,
-            "admin_numeric_columns": sorted(admin_numeric_cols),
-            "suvidha_numeric_columns": sorted(suv_numeric_cols),
             "unmapped_admin_cols": [
                 c for c in admin.columns if c != admin_key and c not in pair_lookup
             ],
+            "key_pairs_compared": len(matched_key_pairs),
         },
         "stats": {
             "total": len(admin_keys | suv_keys),
@@ -1234,6 +1200,9 @@ def reconcile(
             "only_s": len(only_suv_rows),
         },
     }
+    if debug_mode:
+        out["debug"] = debug_info
+    return out
 
 
 # ── Excel report generation ───────────────────────────────────────────────────
@@ -1286,238 +1255,92 @@ def generate_discrepancy_report(
     result: dict,
 ) -> io.BytesIO:
     """
-    Generate a styled .xlsx discrepancy report.
-
-    Sheets:
-      1. Summary       — overall stats
-      2. Discrepancies — side-by-side Admin vs Suvidha rows, highlighted diffs
-      3. Only in Admin — rows missing from Suvidha
-      4. Only in Suvidha — rows missing from Admin
+    Generate mismatch-only Excel report.
+    Output sheet: "Mismatched Records"
     """
     wb = Workbook()
+    ws = wb.active
+    ws.title = "Mismatched Records"
 
-    # ── Colour palette ────────────────────────────────────────────────────────
-    C_HDR_BG = "1A1814"  # dark header bg
+    C_HDR_BG = "1A1814"
     C_HDR_FG = "FFFFFF"
-    C_ADM_BG = "FDF1ED"  # admin row tint
-    C_ADM_DIFF = "F5C4B3"  # admin diff cell
-    C_ADM_FG = "B5451B"
-    C_SUV_BG = "EDF5F1"  # suvidha row tint
-    C_SUV_DIFF = "B8E3D0"  # suvidha diff cell
-    C_SUV_FG = "1A6B4A"
-    C_OK_BG = "EDF5F1"
-    C_OK_FG = "1A6B4A"
-    C_WARN_BG = "FDF1ED"
-    C_WARN_FG = "B5451B"
+    C_ADMIN_DIFF = "F5C4B3"
+    C_SUV_DIFF = "B8E3D0"
     C_NEUTRAL = "F8F7F4"
+    C_ADMIN_FG = "B5451B"
+    C_SUV_FG = "1A6B4A"
 
-    name_col = _pick_column(admin.columns, _NAME_HINTS)
-    number_col = _pick_column(admin.columns, _NUMBER_HINTS)
-    kram_col = _pick_column(admin.columns, _KRAM_HINTS)
-
-    # ── Sheet 1: Summary ──────────────────────────────────────────────────────
-    ws_sum = wb.active
-    ws_sum.title = "Summary"
-    ws_sum.column_dimensions["A"].width = 30
-    ws_sum.column_dimensions["B"].width = 18
-
-    stats = result.get("stats", {})
-    meta = result.get("meta", {})
-
-    summary_rows = [
-        ("Grambook Reconciliation Report", ""),
-        ("Generated", datetime.now().strftime("%d %b %Y, %H:%M")),
-        ("", ""),
-        ("Metric", "Count"),
-        ("Total unique records", stats.get("total", 0)),
-        ("Matching records", stats.get("matched", 0)),
-        ("Discrepancies", stats.get("disc", 0)),
-        ("Only in Admin", stats.get("only_a", 0)),
-        ("Only in Suvidha", stats.get("only_s", 0)),
-        ("", ""),
-        ("Admin key column", result.get("admin_key", "")),
-        ("Suvidha key column", result.get("suv_key", "")),
-        ("Columns compared", len(result.get("col_pairs", []))),
-        ("Duplicate key conflicts", len(meta.get("duplicate_key_conflicts", []))),
-        ("Admin rows missing key", meta.get("admin_missing_keys", 0)),
-        ("Suvidha rows missing key", meta.get("suvidha_missing_keys", 0)),
-    ]
-
-    for r_idx, (label, value) in enumerate(summary_rows, start=1):
-        ca = ws_sum.cell(row=r_idx, column=1, value=excel_safe_text(label))
-        cb = ws_sum.cell(row=r_idx, column=2, value=value)
-        if r_idx == 1:
-            _style_cell(ca, fill_hex=C_HDR_BG, bold=True, color=C_HDR_FG, wrap=True)
-            _style_cell(cb, fill_hex=C_HDR_BG, bold=True, color=C_HDR_FG)
-            ws_sum.merge_cells(f"A1:B1")
-        elif label == "Metric":
-            _style_cell(ca, fill_hex="E5E2DB", bold=True)
-            _style_cell(cb, fill_hex="E5E2DB", bold=True, align="center")
-        elif label in ("Matching records",):
-            _style_cell(ca, fill_hex=C_OK_BG, color=C_OK_FG)
-            _style_cell(cb, fill_hex=C_OK_BG, color=C_OK_FG, align="center")
-        elif label in ("Discrepancies", "Only in Admin", "Only in Suvidha"):
-            _style_cell(ca, fill_hex=C_WARN_BG, color=C_WARN_FG)
-            _style_cell(cb, fill_hex=C_WARN_BG, color=C_WARN_FG, align="center")
-        elif label:
-            _style_cell(ca, fill_hex=C_NEUTRAL)
-            _style_cell(cb, fill_hex=C_NEUTRAL, align="center")
-
-    # ── Sheet 2: Discrepancies ────────────────────────────────────────────────
-    discrepancies = result.get("discrepancies", [])
-    ws_disc = wb.create_sheet("Discrepancies")
-
-    disc_col_headers = [
-        "ID",
-        "Normalized ID",
-        "Mismatch Count",
-        "Changed Columns",
-        "Admin Excel Rows",
-        "Suvidha Excel Rows",
-    ]
-    for ci, hdr in enumerate(disc_col_headers, start=1):
-        c = ws_disc.cell(row=1, column=ci, value=excel_safe_text(hdr))
+    col_pairs = result.get("col_pairs", [])
+    compare_cols = [p.get("admin_col", "") for p in col_pairs if p.get("admin_col")]
+    headers = ["Source", "ID"] + compare_cols
+    for ci, hdr in enumerate(headers, start=1):
+        c = ws.cell(row=1, column=ci, value=excel_safe_text(hdr))
         _style_cell(c, fill_hex=C_HDR_BG, bold=True, color=C_HDR_FG)
 
-    if discrepancies:
-        for ri, disc in enumerate(discrepancies, start=2):
-            ws_disc.cell(row=ri, column=1, value=excel_safe_text(disc.get("id", "")))
-            ws_disc.cell(
-                row=ri, column=2, value=excel_safe_text(disc.get("normalized_id", ""))
-            )
-            ws_disc.cell(row=ri, column=3, value=disc.get("mismatch_count", 0))
-            ws_disc.cell(
-                row=ri,
-                column=4,
-                value=excel_safe_text(", ".join(disc.get("changed_columns", []))),
-            )
-            ws_disc.cell(
-                row=ri,
-                column=5,
-                value=", ".join(str(x) for x in disc.get("admin_excel_rows", [])),
-            )
-            ws_disc.cell(
-                row=ri,
-                column=6,
-                value=", ".join(str(x) for x in disc.get("suvidha_excel_rows", [])),
-            )
-            for ci in range(1, len(disc_col_headers) + 1):
-                _style_cell(ws_disc.cell(row=ri, column=ci), fill_hex=C_NEUTRAL)
-    else:
-        ws_disc.cell(row=2, column=1, value="No discrepancies found.")
-        _style_cell(ws_disc.cell(row=2, column=1), fill_hex=C_OK_BG, color=C_OK_FG)
+    discrepancies = result.get("discrepancies", [])
+    row_no = 2
+    for disc in discrepancies:
+        mismatch_map = disc.get("mismatches", {})
+        if not mismatch_map:
+            continue
 
-    # Auto-width for discrepancies sheet
-    for col_cells in ws_disc.columns:
-        length = max((len(str(c.value or "")) for c in col_cells), default=8)
-        ws_disc.column_dimensions[get_column_letter(col_cells[0].column)].width = min(
-            length + 4, 40
+        admin_row_no = row_no
+        suv_row_no = row_no + 1
+        ws.cell(row=admin_row_no, column=1, value="Admin")
+        ws.cell(row=admin_row_no, column=2, value=excel_safe_text(disc.get("id", "")))
+        ws.cell(row=suv_row_no, column=1, value="Suvidha")
+        ws.cell(row=suv_row_no, column=2, value=excel_safe_text(disc.get("id", "")))
+        _style_cell(
+            ws.cell(row=admin_row_no, column=1),
+            fill_hex=C_ADMIN_DIFF,
+            color=C_ADMIN_FG,
+            bold=True,
+        )
+        _style_cell(
+            ws.cell(row=admin_row_no, column=2),
+            fill_hex=C_ADMIN_DIFF,
+            color=C_ADMIN_FG,
+            bold=True,
+        )
+        _style_cell(
+            ws.cell(row=suv_row_no, column=1),
+            fill_hex=C_SUV_DIFF,
+            color=C_SUV_FG,
+            bold=True,
+        )
+        _style_cell(
+            ws.cell(row=suv_row_no, column=2),
+            fill_hex=C_SUV_DIFF,
+            color=C_SUV_FG,
+            bold=True,
         )
 
-    # ── Sheet 3: Only in Admin ────────────────────────────────────────────────
-    ws_md = wb.create_sheet("Mismatch Details")
-    mismatch_details = result.get("mismatch_details", [])
-    detail_headers = [
-        "ID",
-        "Normalized ID",
-        "Column",
-        "Suvidha Column",
-        "Admin Value",
-        "Suvidha Value",
-        "Difference",
-        "Admin Excel Rows",
-        "Suvidha Excel Rows",
-    ]
-    for ci, hdr in enumerate(detail_headers, start=1):
-        c = ws_md.cell(row=1, column=ci, value=hdr)
-        _style_cell(c, fill_hex=C_HDR_BG, bold=True, color=C_HDR_FG)
+        for ci, col in enumerate(compare_cols, start=3):
+            diff = mismatch_map.get(col)
+            admin_cell = ws.cell(row=admin_row_no, column=ci, value="")
+            suv_cell = ws.cell(row=suv_row_no, column=ci, value="")
+            if diff:
+                admin_cell.value = excel_safe_text(diff.get("admin", ""))
+                suv_cell.value = excel_safe_text(diff.get("suvidha", ""))
+                _style_cell(
+                    admin_cell, fill_hex=C_ADMIN_DIFF, color=C_ADMIN_FG, bold=True
+                )
+                _style_cell(suv_cell, fill_hex=C_SUV_DIFF, color=C_SUV_FG, bold=True)
+            else:
+                _style_cell(admin_cell, fill_hex=C_NEUTRAL)
+                _style_cell(suv_cell, fill_hex=C_NEUTRAL)
 
-    if mismatch_details:
-        for ri, item in enumerate(mismatch_details, start=2):
-            ws_md.cell(row=ri, column=1, value=excel_safe_text(item.get("id", "")))
-            ws_md.cell(
-                row=ri, column=2, value=excel_safe_text(item.get("normalized_id", ""))
-            )
-            ws_md.cell(row=ri, column=3, value=excel_safe_text(item.get("column", "")))
-            ws_md.cell(
-                row=ri,
-                column=4,
-                value=excel_safe_text(item.get("suvidha_column", "")),
-            )
-            ws_md.cell(
-                row=ri, column=5, value=excel_safe_text(item.get("admin_value", ""))
-            )
-            ws_md.cell(
-                row=ri, column=6, value=excel_safe_text(item.get("suvidha_value", ""))
-            )
-            ws_md.cell(
-                row=ri, column=7, value=excel_safe_text(item.get("difference", ""))
-            )
-            ws_md.cell(
-                row=ri,
-                column=8,
-                value=", ".join(str(x) for x in item.get("admin_excel_rows", [])),
-            )
-            ws_md.cell(
-                row=ri,
-                column=9,
-                value=", ".join(str(x) for x in item.get("suvidha_excel_rows", [])),
-            )
-            for ci in range(1, len(detail_headers) + 1):
-                _style_cell(ws_md.cell(row=ri, column=ci), fill_hex=C_NEUTRAL)
-    else:
-        ws_md.cell(row=2, column=1, value="No mismatches found.")
-        _style_cell(ws_md.cell(row=2, column=1), fill_hex=C_OK_BG, color=C_OK_FG)
+        row_no += 2
 
-    for col_cells in ws_md.columns:
+    if row_no == 2:
+        ws.cell(row=2, column=1, value="No mismatched records found.")
+        _style_cell(ws.cell(row=2, column=1), fill_hex=C_NEUTRAL)
+
+    for col_cells in ws.columns:
         length = max((len(str(c.value or "")) for c in col_cells), default=8)
-        ws_md.column_dimensions[get_column_letter(col_cells[0].column)].width = min(
+        ws.column_dimensions[get_column_letter(col_cells[0].column)].width = min(
             length + 4, 42
         )
-
-    only_admin_rows = result.get("only_admin_rows", [])
-    ws_oa = wb.create_sheet("Only in Admin")
-    if only_admin_rows:
-        oa_cols = admin.columns
-        for ci, hdr in enumerate(oa_cols, start=1):
-            c = ws_oa.cell(row=1, column=ci, value=excel_safe_text(hdr))
-            _style_cell(c, fill_hex=C_HDR_BG, bold=True, color=C_HDR_FG)
-        for ri, row in enumerate(only_admin_rows, start=2):
-            for ci, col in enumerate(oa_cols, start=1):
-                c = ws_oa.cell(
-                    row=ri, column=ci, value=excel_safe_text(row.get(col, ""))
-                )
-                _style_cell(c, fill_hex=C_ADM_BG)
-        for col_cells in ws_oa.columns:
-            length = max((len(str(c.value or "")) for c in col_cells), default=8)
-            ws_oa.column_dimensions[get_column_letter(col_cells[0].column)].width = min(
-                length + 4, 40
-            )
-    else:
-        ws_oa.cell(row=1, column=1, value="No records found only in Admin.")
-
-    # ── Sheet 4: Only in Suvidha ──────────────────────────────────────────────
-    only_suv_rows = result.get("only_suv_rows", [])
-    ws_os = wb.create_sheet("Only in Suvidha")
-    if only_suv_rows:
-        # FIX: Use suv_cols (not admin.columns) for suvidha-only rows
-        os_cols = result.get("suv_cols", admin.columns)
-        for ci, hdr in enumerate(os_cols, start=1):
-            c = ws_os.cell(row=1, column=ci, value=excel_safe_text(hdr))
-            _style_cell(c, fill_hex=C_HDR_BG, bold=True, color=C_HDR_FG)
-        for ri, row in enumerate(only_suv_rows, start=2):
-            for ci, col in enumerate(os_cols, start=1):
-                c = ws_os.cell(
-                    row=ri, column=ci, value=excel_safe_text(row.get(col, ""))
-                )
-                _style_cell(c, fill_hex=C_SUV_BG)
-        for col_cells in ws_os.columns:
-            length = max((len(str(c.value or "")) for c in col_cells), default=8)
-            ws_os.column_dimensions[get_column_letter(col_cells[0].column)].width = min(
-                length + 4, 40
-            )
-    else:
-        ws_os.cell(row=1, column=1, value="No records found only in Suvidha.")
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -1655,13 +1478,19 @@ def run_reconcile():
 
     try:
         a_hr, a_hs, s_hr, s_hs = _parse_header_params(request.form)
+        debug_mode = str(request.form.get("debug", "")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         admin = parse_uploaded_dataset(admin_file, a_hr, a_hs)
         suv = parse_uploaded_dataset(suv_file, s_hr, s_hs)
 
         admin_key = _resolve_key_column(admin_key_raw, admin.columns)
         suv_key = _resolve_key_column(suv_key_raw, suv.columns)
 
-        result = reconcile(admin, suv, admin_key, suv_key)
+        result = reconcile(admin, suv, admin_key, suv_key, debug_mode=debug_mode)
         result["ingestion"] = {
             "admin": {
                 "detected_header_row": admin.header_row_index + 1,
