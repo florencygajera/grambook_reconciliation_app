@@ -8,11 +8,9 @@ from __future__ import annotations
 
 import csv
 import io
-import logging
 import os
 import re
 import shutil
-import traceback
 import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -25,8 +23,6 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-
-# ── Optional dependency imports (graceful degradation) ───────────────────────
 
 try:
     from PIL import Image
@@ -48,29 +44,17 @@ try:
 except ImportError:
     fuzz = None
 
-try:
-    import xlrd
-except ImportError:
-    xlrd = None
-
-# ── App setup ─────────────────────────────────────────────────────────────────
-
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger(__name__)
-
 app = Flask(__name__, static_folder="static")
+
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
 
 class ReconciliationError(Exception):
-    """Raised for user-facing data / configuration problems."""
+    pass
 
-
-# ── Indic digit normalisation map ─────────────────────────────────────────────
 
 INDIC_DIGIT_MAP = str.maketrans(
     {
-        # Devanagari digits
         "\u0966": "0",
         "\u0967": "1",
         "\u0968": "2",
@@ -81,7 +65,6 @@ INDIC_DIGIT_MAP = str.maketrans(
         "\u096d": "7",
         "\u096e": "8",
         "\u096f": "9",
-        # Gujarati digits
         "\u0ae6": "0",
         "\u0ae7": "1",
         "\u0ae8": "2",
@@ -94,9 +77,6 @@ INDIC_DIGIT_MAP = str.maketrans(
         "\u0aef": "9",
     }
 )
-
-
-# ── Data model ────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -116,11 +96,12 @@ class ParsedDataset:
     column_position_map: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
-# ── Tesseract setup ───────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Tesseract setup
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _iter_registry_tesseract_paths() -> list[str]:
-    """Return Tesseract executable paths found via Windows registry."""
     if winreg is None:
         return []
     roots = [
@@ -189,7 +170,6 @@ def _iter_registry_tesseract_paths() -> list[str]:
 
 
 def _configure_tesseract() -> None:
-    """Locate and configure tesseract command path."""
     if pytesseract is None:
         return
     candidates: list[str] = []
@@ -223,14 +203,15 @@ def _configure_tesseract() -> None:
 _configure_tesseract()
 
 
-# ── Text normalisation helpers ────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Text normalisation helpers
+# ──────────────────────────────────────────────────────────────────────────────
 
 EXCEL_ILLEGAL_CHARS_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
 ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200D\uFEFF]")
 
 
 def canonical_text(value: Any) -> str:
-    """Normalize any value to a clean unicode string."""
     text = "" if value is None else str(value)
     text = re.sub(r"[\r\n]+", " ", text)
     text = unicodedata.normalize("NFKC", text)
@@ -245,10 +226,6 @@ def excel_safe_text(value: Any) -> str:
 
 
 def canonical_numeric_text(value: Any) -> str | None:
-    """
-    Return a canonical numeric string if *value* is numeric, else None.
-    Strips commas, trailing zeros, and handles Decimal precision safely.
-    """
     text = canonical_text(value)
     if not text:
         return None
@@ -257,7 +234,7 @@ def canonical_numeric_text(value: Any) -> str | None:
         num = float(text)
     except (TypeError, ValueError):
         return None
-    if num != num or num in (float("inf"), float("-inf")):
+    if not (num == num and num not in (float("inf"), float("-inf"))):
         return None
     if abs(num - round(num)) < 1e-9:
         return str(int(round(num)))
@@ -277,15 +254,36 @@ def canonical_compare_value(value: Any) -> str:
 
 
 def normalize_key_value(value: Any) -> str:
-    """Conservative key normalization for audit-safe matching."""
-    return canonical_text(value)
+    return canonical_text(value).strip().lower()
+
+
+def _is_zero_or_blank(value: Any) -> bool:
+    text = canonical_text(value)
+    if not text:
+        return True
+    return canonical_numeric_text(text) == "0"
+
+
+def values_equivalent_for_compare(left: Any, right: Any) -> bool:
+    if _is_zero_or_blank(left) and _is_zero_or_blank(right):
+        return True
+    return canonical_compare_value(left) == canonical_compare_value(right)
 
 
 def normalize_column_key(name: str) -> str:
     return re.sub(r"[\s_\-]+", "", canonical_text(name).lower())
 
 
-# ── File parsing — CSV / XLS / XLSX → raw string matrix ──────────────────────
+def is_numeric_like(text: str) -> bool:
+    t = canonical_text(text)
+    if not t:
+        return False
+    return bool(re.fullmatch(r"[+-]?\d+(\.\d+)?", t.replace(",", "")))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# File parsing — CSV / XLS / XLSX → raw string matrix
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _decode_csv_bytes(file_bytes: bytes) -> io.StringIO:
@@ -294,7 +292,7 @@ def _decode_csv_bytes(file_bytes: bytes) -> io.StringIO:
             return io.StringIO(file_bytes.decode(enc))
         except UnicodeDecodeError:
             continue
-    raise ReconciliationError("CSV encoding is unsupported or the file is corrupt.")
+    raise ReconciliationError("CSV encoding is unsupported or file is corrupt.")
 
 
 def _normalize_row_length(
@@ -326,16 +324,17 @@ def _parse_csv_matrix(file_bytes: bytes) -> list[list[str]]:
 
 
 def _parse_xls_matrix(file_bytes: bytes) -> list[list[str]]:
-    if xlrd is None:
+    try:
+        import xlrd
+    except ImportError as e:
         raise ReconciliationError(
-            ".xls file detected but xlrd is not installed. Run: pip install xlrd==2.0.1"
-        )
+            ".xls file detected but xlrd is missing. Install xlrd==2.0.1"
+        ) from e
     try:
         wb = xlrd.open_workbook(file_contents=file_bytes)
         sh = wb.sheet_by_index(0)
     except Exception as e:
         raise ReconciliationError(f"Unable to read .xls workbook: {e}") from e
-
     matrix = [
         [canonical_text(sh.cell_value(r, c)) for c in range(sh.ncols)]
         for r in range(sh.nrows)
@@ -347,8 +346,7 @@ def _parse_xls_matrix(file_bytes: bytes) -> list[list[str]]:
         )
         for rr in range(rlo, rhi):
             for cc in range(clo, chi):
-                if rr < len(matrix) and cc < len(matrix[rr]):
-                    matrix[rr][cc] = top_left
+                matrix[rr][cc] = top_left
     return matrix
 
 
@@ -379,10 +377,6 @@ def _parse_xlsx_matrix(file_bytes: bytes) -> tuple[list[list[str]], list[str]]:
 
     max_row = ws.max_row or 0
     max_col = ws.max_column or 0
-
-    if max_row == 0 or max_col == 0:
-        raise ReconciliationError("The uploaded .xlsx sheet appears to be empty.")
-
     matrix = [["" for _ in range(max_col)] for _ in range(max_row)]
 
     for r in range(1, max_row + 1):
@@ -393,15 +387,12 @@ def _parse_xlsx_matrix(file_bytes: bytes) -> tuple[list[list[str]], list[str]]:
         top_left = matrix[mrange.min_row - 1][mrange.min_col - 1]
         for rr in range(mrange.min_row - 1, mrange.max_row):
             for cc in range(mrange.min_col - 1, mrange.max_col):
-                if rr < len(matrix) and cc < len(matrix[rr]):
-                    matrix[rr][cc] = top_left
+                matrix[rr][cc] = top_left
 
     images = getattr(ws, "_images", [])
     if images:
         if Image is None or pytesseract is None:
-            notes.append(
-                "Image(s) detected but OCR dependencies (Pillow / pytesseract) are unavailable."
-            )
+            notes.append("Image(s) detected but OCR dependencies are unavailable.")
         else:
             for img in images:
                 anchor = getattr(img, "anchor", None)
@@ -428,15 +419,11 @@ def _parse_xlsx_matrix(file_bytes: bytes) -> tuple[list[list[str]], list[str]]:
     return _normalize_row_length(matrix), notes
 
 
-def parse_matrix_from_upload(
-    file_storage,
-) -> tuple[list[list[str]], str, list[str]]:
-    """Read an uploaded FileStorage and return (matrix, format_name, notes)."""
+def parse_matrix_from_upload(file_storage) -> tuple[list[list[str]], str, list[str]]:
     filename = (file_storage.filename or "").lower().strip()
     file_bytes = file_storage.read()
     if not file_bytes:
         raise ReconciliationError("Uploaded file is empty.")
-
     if filename.endswith(".csv"):
         return _parse_csv_matrix(file_bytes), "csv", []
     if filename.endswith(".xlsx"):
@@ -444,46 +431,89 @@ def parse_matrix_from_upload(
         return matrix, "xlsx", notes
     if filename.endswith(".xls"):
         return _parse_xls_matrix(file_bytes), "xls", []
+    raise ReconciliationError("Unsupported file format. Upload .csv, .xls, or .xlsx")
 
-    # Fallback: sniff by magic bytes (PK = xlsx/zip, \xD0\xCF = xls)
-    if file_bytes[:2] == b"PK":
-        matrix, notes = _parse_xlsx_matrix(file_bytes)
-        return matrix, "xlsx", notes
-    if file_bytes[:2] == b"\xd0\xcf":
-        return _parse_xls_matrix(file_bytes), "xls", []
 
-    raise ReconciliationError(
-        "Unsupported file format. Please upload a .csv, .xls, or .xlsx file."
+# ──────────────────────────────────────────────────────────────────────────────
+# Header detection
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _row_header_score(row: list[str]) -> float:
+    non_empty = [canonical_text(x) for x in row if canonical_text(x)]
+    if len(non_empty) < 2:
+        return -1.0
+    text_cells = sum(1 for x in non_empty if not is_numeric_like(x))
+    text_ratio = text_cells / max(1, len(non_empty))
+    avg_len = sum(len(x) for x in non_empty) / len(non_empty)
+    long_penalty = sum(1 for x in non_empty if len(x) > 80)
+    return (
+        len(non_empty) * 0.25 + text_ratio * 2.5 - (avg_len / 120) - long_penalty * 1.2
     )
 
 
-# ── Header detection ──────────────────────────────────────────────────────────
+def _is_sub_header_row(row: list[str]) -> bool:
+    non_empty = [x for x in row if x]
+    if len(non_empty) < 4:
+        return False
+    unique_vals = set(non_empty)
+    repetition_ratio = 1.0 - len(unique_vals) / len(non_empty)
+    if repetition_ratio < 0.40:
+        return False
+    text_ratio = sum(1 for x in non_empty if not is_numeric_like(x)) / len(non_empty)
+    return text_ratio >= 0.90
 
 
 def detect_header_start(
     matrix: list[list[str]], manual_header_row: int | None = None
-) -> int:
-    """
-    Return the 0-based index of the header row.
-
-    FIX (Bug 4): The original function returned a tuple[int, int | None] where
-    the second element (forced_span) was *always* None, making the corresponding
-    branch in build_headers permanently unreachable.  The return type has been
-    simplified to just int; build_headers no longer accepts a forced_span arg.
-    """
+) -> tuple[int, int | None]:
     if not matrix:
         raise ReconciliationError("File has no rows.")
 
     if manual_header_row is not None:
         idx = manual_header_row - 1
         if idx < 0 or idx >= len(matrix):
-            raise ReconciliationError(
-                f"Manual header row {manual_header_row} is out of range "
-                f"(file has {len(matrix)} rows)."
-            )
-        return idx
+            raise ReconciliationError("Manual header row is out of range.")
+        return idx, None
 
-    return 0
+    max_scan = min(60, len(matrix))
+    scored = []
+    for i in range(max_scan):
+        score = _row_header_score(matrix[i])
+        if score < 0:
+            continue
+        non_empty = [x for x in matrix[i] if x]
+        if len(non_empty) < 2:
+            continue
+        text_ratio = sum(1 for x in non_empty if not is_numeric_like(x)) / len(
+            non_empty
+        )
+        if text_ratio < 0.55:
+            continue
+        if any(len(x) > 140 for x in non_empty):
+            continue
+        scored.append((i, score))
+
+    if not scored:
+        raise ReconciliationError(
+            "Could not detect a valid header row. Please use manual header override."
+        )
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    best_idx = scored[0][0]
+
+    if _is_sub_header_row(matrix[best_idx]) and best_idx > 0:
+        prev = matrix[best_idx - 1]
+        prev_non_empty = [x for x in prev if x]
+        if (
+            prev_non_empty
+            and sum(1 for x in prev_non_empty if not is_numeric_like(x))
+            / len(prev_non_empty)
+            >= 0.9
+        ):
+            return best_idx - 1, 2
+
+    return best_idx, None
 
 
 def _forward_fill_header_cells(row: list[str]) -> list[str]:
@@ -559,15 +589,10 @@ def build_headers(
     matrix: list[list[str]],
     header_start: int,
     manual_header_span: int | None = None,
+    forced_span: int | None = None,
 ) -> tuple[list[str], dict[str, str], list[int], int]:
-    """
-    FIX (Bug 4): Removed the unused `forced_span` parameter. The caller
-    (dataframe_from_matrix) no longer unpacks a second value from
-    detect_header_start, so forced_span was always None and the
-    `elif forced_span` branch was permanently dead code.
-    """
     if not matrix:
-        raise ReconciliationError("Empty matrix — cannot build headers.")
+        raise ReconciliationError("Empty matrix.")
 
     max_cols = max(len(r) for r in matrix)
     local_rows: list[list[str]] = []
@@ -575,18 +600,66 @@ def build_headers(
         row = (matrix[i] if i < len(matrix) else []) + [""] * max_cols
         local_rows.append(_forward_fill_header_cells(row[:max_cols]))
 
-    if not local_rows:
-        raise ReconciliationError(
-            "Header row is at the very end of the file — no data rows follow."
+    if forced_span is not None and manual_header_span is None:
+        chosen_span = forced_span
+    else:
+        spans = (
+            [manual_header_span]
+            if manual_header_span in (1, 2, 3, 4, 5)
+            else [5, 4, 3, 2, 1]
         )
+        chosen_span = 1
+        best_score = -1.0
 
-    chosen_span = manual_header_span if manual_header_span in (1, 2, 3, 4, 5) else 1
+        for span in spans:
+            if header_start + span > len(matrix):
+                continue
+            combined = []
+            for c in range(max_cols):
+                parts = _dedupe_in_order(
+                    [local_rows[r][c] for r in range(span) if local_rows[r][c]]
+                )
+                combined.append(" ".join(parts).strip())
+
+            non_empty = sum(1 for h in combined if h)
+            score = non_empty - sum(1 for h in combined if len(h) > 90) * 1.5
+
+            multi_header_bonus = 0
+            for row_idx in range(span):
+                row_text = " ".join(local_rows[row_idx]).lower()
+                if any(
+                    k in row_text
+                    for k in [
+                        "baki",
+                        "test",
+                        "type",
+                        "category",
+                        "status",
+                        "remark",
+                        "sr no",
+                        "serial",
+                        "બાકી",
+                        "ચાલુ",
+                        "કુલ",
+                    ]
+                ):
+                    multi_header_bonus += 2
+                if any(
+                    k in row_text
+                    for k in ["no", "number", "id", "code", "name", "ક્રમ", "નંબર"]
+                ):
+                    multi_header_bonus += 1
+            score += multi_header_bonus
+
+            if score > best_score:
+                best_score = score
+                chosen_span = span
 
     header_rows = local_rows[:chosen_span]
     raw_headers: list[str] = []
     for c in range(max_cols):
         parts = _dedupe_in_order(
-            [header_rows[r][c] for r in range(len(header_rows)) if header_rows[r][c]]
+            [header_rows[r][c] for r in range(chosen_span) if header_rows[r][c]]
         )
         raw_headers.append(canonical_text(" ".join(parts)))
 
@@ -628,6 +701,11 @@ def _align_row(row: list[str], target_cols: int) -> list[str]:
         r += [""] * (target_cols - len(r))
     elif len(r) > target_cols:
         r = r[:target_cols]
+    first_non_empty = next((i for i, v in enumerate(r) if canonical_text(v)), None)
+    if first_non_empty is not None and first_non_empty > 0:
+        trailing_empty = all(not canonical_text(x) for x in r[-first_non_empty:])
+        if trailing_empty:
+            r = r[first_non_empty:] + [""] * first_non_empty
     return r
 
 
@@ -643,12 +721,14 @@ def dataframe_from_matrix(
     max_cols = max(len(r) for r in matrix)
     matrix = _normalize_row_length(matrix, max_cols)
 
-    # FIX (Bug 4): detect_header_start now returns a plain int (not a tuple).
-    header_start = detect_header_start(matrix, manual_header_row=manual_header_row)
+    header_start, forced_span = detect_header_start(
+        matrix, manual_header_row=manual_header_row
+    )
     headers, normalized_map, drop_indices, header_span = build_headers(
         matrix,
         header_start,
         manual_header_span=manual_header_span,
+        forced_span=forced_span,
     )
 
     kept_indices = [i for i in range(max_cols) if i not in set(drop_indices)]
@@ -656,21 +736,6 @@ def dataframe_from_matrix(
         raise ReconciliationError("No usable columns detected after header processing.")
 
     data_rows = matrix[header_start + header_span :]
-
-    # Safety fallback: if auto span consumed all rows as "header",
-    # retry with a single header row.
-    if (
-        manual_header_span is None
-        and not data_rows
-        and (header_start + 1) < len(matrix)
-        and header_span > 1
-    ):
-        headers, normalized_map, drop_indices, header_span = build_headers(
-            matrix, header_start, manual_header_span=1
-        )
-        kept_indices = [i for i in range(max_cols) if i not in set(drop_indices)]
-        data_rows = matrix[header_start + header_span :]
-
     aligned_rows: list[list[str]] = []
     excel_row_numbers: list[int] = []
     row_position_map: dict[int, int] = {}
@@ -687,12 +752,6 @@ def dataframe_from_matrix(
         row_position_map[df_row_index] = actual_excel_row
 
     if len(headers) != len(kept_indices):
-        logger.warning(
-            "Header count (%d) != kept column count (%d). "
-            "Falling back to generic column names.",
-            len(headers),
-            len(kept_indices),
-        )
         headers = [f"column_{i}" for i in range(len(kept_indices))]
         normalized_map = {normalize_column_key(h): h for h in headers}
 
@@ -705,7 +764,7 @@ def dataframe_from_matrix(
     )
 
     rows = [dict(zip(headers, vals)) for vals in aligned_rows]
-    column_position_map: dict[str, dict[str, int]] = {
+    column_position_map = {
         headers[i]: {"df_index": i, "excel_col": kept_indices[i] + 1}
         for i in range(len(headers))
     }
@@ -750,7 +809,9 @@ def parse_uploaded_dataset(
     return parsed
 
 
-# ── Reconciliation ────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Reconciliation
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _similarity(a: str, b: str) -> float:
@@ -762,52 +823,35 @@ def _similarity(a: str, b: str) -> float:
 
 
 def map_columns_smart(
-    admin_cols: list[str],
-    suv_cols: list[str],
-    admin_key: str,
-    suv_key: str,
+    admin_cols: list[str], suv_cols: list[str], admin_key: str, suv_key: str
 ) -> list[tuple[str, str, float]]:
-    """Map admin columns to Suvidha columns by name similarity."""
     admin_candidates = [c for c in admin_cols if c != admin_key]
     suv_candidates = [c for c in suv_cols if c != suv_key]
     suv_norm = {normalize_column_key(c): c for c in suv_candidates}
     used_suv: set[str] = set()
     mapped: list[tuple[str, str, float]] = []
 
-    # Pass 1 — exact normalized match
     for ac in admin_candidates:
         sc = suv_norm.get(normalize_column_key(ac))
         if sc and sc not in used_suv:
             mapped.append((ac, sc, 1.0))
             used_suv.add(sc)
 
-    # Pass 2 — stricter fuzzy match (>= 92 % with clear winner margin)
     for ac in admin_candidates:
         if any(x[0] == ac for x in mapped):
             continue
         best_sc, best_score = None, 0.0
-        second_best = 0.0
         na = normalize_column_key(ac)
         for sc in suv_candidates:
             if sc in used_suv:
                 continue
             score = _similarity(na, normalize_column_key(sc))
             if score > best_score:
-                second_best = best_score
                 best_score = score
                 best_sc = sc
-            elif score > second_best:
-                second_best = score
-        if best_sc and best_score >= 0.92 and (best_score - second_best) >= 0.03:
+        if best_sc and best_score >= 0.72:
             mapped.append((ac, best_sc, best_score))
             used_suv.add(best_sc)
-
-    # Pass 3 — safe positional fallback for remaining columns
-    remaining_admin = [ac for ac in admin_candidates if all(m[0] != ac for m in mapped)]
-    remaining_suv = [sc for sc in suv_candidates if sc not in used_suv]
-    for ac, sc in zip(remaining_admin, remaining_suv):
-        mapped.append((ac, sc, 0.5))
-        used_suv.add(sc)
 
     return mapped
 
@@ -841,53 +885,7 @@ def reconcile(
     suv: ParsedDataset,
     admin_key: str,
     suv_key: str,
-    debug_mode: bool = False,
 ) -> dict[str, Any]:
-    """Core reconciliation logic (mismatch-only, row-to-row, no aggregation)."""
-
-    def _decimal_from_value(value: Any) -> Decimal | None:
-        num = canonical_numeric_text(value)
-        if num is None:
-            return None
-        try:
-            return Decimal(num)
-        except (InvalidOperation, ValueError):
-            return None
-
-    def _decimal_to_text(value: Decimal) -> str:
-        text = format(value.normalize(), "f")
-        if "." in text:
-            text = text.rstrip("0").rstrip(".")
-        return "0" if not text or text == "-0" else text
-
-    def _values_different(left: Any, right: Any) -> tuple[bool, str, str, str, bool]:
-        left_txt = canonical_text(left)
-        right_txt = canonical_text(right)
-        left_dec = _decimal_from_value(left_txt) if left_txt else None
-        right_dec = _decimal_from_value(right_txt) if right_txt else None
-
-        # Numeric compare only when both are numeric. Blank is never equal to zero.
-        if left_dec is not None and right_dec is not None:
-            if left_dec == right_dec:
-                return (
-                    False,
-                    _decimal_to_text(left_dec),
-                    _decimal_to_text(right_dec),
-                    "",
-                    True,
-                )
-            return (
-                True,
-                _decimal_to_text(left_dec),
-                _decimal_to_text(right_dec),
-                _decimal_to_text(left_dec - right_dec),
-                True,
-            )
-
-        if left_txt == right_txt:
-            return False, left_txt, right_txt, "", False
-        return True, left_txt, right_txt, "", False
-
     admin_idx, admin_missing_keys = _build_key_index(
         admin.rows, admin_key, admin.row_position_map
     )
@@ -898,264 +896,99 @@ def reconcile(
     col_pairs = map_columns_smart(admin.columns, suv.columns, admin_key, suv_key)
     pair_lookup = {a: s for a, s, _ in col_pairs}
 
-    priority_tokens = ("tax", "amount", "baki", "balance")
-    focused_pairs = [
-        (a, s, c)
-        for a, s, c in col_pairs
-        if any(
-            t in normalize_column_key(a) or t in normalize_column_key(s)
-            for t in priority_tokens
-        )
-    ]
-    if focused_pairs:
-        focused_admin_cols = {a for a, _, _ in focused_pairs}
-        compare_pairs = focused_pairs + [
-            pair for pair in col_pairs if pair[0] not in focused_admin_cols
-        ]
-    else:
-        compare_pairs = col_pairs
-
     admin_keys = set(admin_idx)
     suv_keys = set(suv_idx)
-    only_admin_rows: list[dict[str, str]] = []
-    only_suv_rows: list[dict[str, str]] = []
-    discrepancies: list[dict[str, Any]] = []
-    mismatch_details: list[dict[str, Any]] = []
+    common = admin_keys & suv_keys
+    only_admin_keys = admin_keys - suv_keys
+    only_suv_keys = suv_keys - admin_keys
+
+    discrepancies = []
     matching_records = 0
-    duplicate_key_conflicts: list[dict[str, Any]] = []
-    strict_mismatch_count = 0
-    hidden_mismatches = 0
-    hidden_mismatch_samples: list[dict[str, Any]] = []
+    duplicate_key_conflicts = []
 
-    matched_key_pairs: list[tuple[str, str, float, str]] = []
-    used_suv_keys: set[str] = set()
-
-    # Exact key matches first (fast path).
-    for a_key in admin_idx.keys():
-        if a_key in suv_idx:
-            matched_key_pairs.append((a_key, a_key, 1.0, "exact"))
-            used_suv_keys.add(a_key)
-
-    # Fuzzy key fallback for remaining keys (>= 90%).
-    remaining_suv_keys = [k for k in suv_idx.keys() if k not in used_suv_keys]
-    for a_key in admin_idx.keys():
-        if a_key in suv_idx:
-            continue
-        best_key = ""
-        best_score = 0.0
-        second_best = 0.0
-        for s_key in remaining_suv_keys:
-            score = _similarity(a_key, s_key)
-            if score > best_score:
-                second_best = best_score
-                best_score = score
-                best_key = s_key
-            elif score > second_best:
-                second_best = score
-        if best_key and best_score >= 0.90 and (best_score - second_best) >= 0.03:
-            matched_key_pairs.append((a_key, best_key, best_score, "fuzzy"))
-            used_suv_keys.add(best_key)
-            remaining_suv_keys = [k for k in remaining_suv_keys if k != best_key]
-
-    def _record_mismatch(
-        a_item: dict[str, Any],
-        s_item: dict[str, Any],
-        normalized_key: str,
-        key_confidence: float,
-        key_match_type: str,
-    ) -> bool:
-        """
-        Compare a matched pair of rows and record any column-level mismatches.
-
-        FIX (Bug 2): This function now ONLY accepts two non-None row items.
-        The original code also called it with one side as None (for unmatched /
-        extra rows), which caused every admin column to compare against an empty
-        string and be counted as a discrepancy.  Unmatched rows are already
-        captured in only_admin_rows / only_suv_rows; they must NOT flow through
-        this function.
-        """
-        nonlocal strict_mismatch_count, hidden_mismatches
-        admin_row = a_item["row"]
-        suv_row = s_item["row"]
-        mismatch_map: dict[str, Any] = {}
-        id_display = (
-            a_item.get("display_key") or s_item.get("display_key") or normalized_key
-        )
-
-        for ac, sc, col_conf in compare_pairs:
-            left_val = admin_row.get(ac, "")
-            right_val = suv_row.get(sc, "")
-            left_raw = canonical_text(left_val)
-            right_raw = canonical_text(right_val)
-            strict_changed = left_raw != right_raw
-            if strict_changed:
-                strict_mismatch_count += 1
-            changed, left_fmt, right_fmt, diff_text, is_numeric = _values_different(
-                left_val, right_val
-            )
-            if strict_changed and not changed:
-                hidden_mismatches += 1
-                if len(hidden_mismatch_samples) < 25:
-                    hidden_mismatch_samples.append(
-                        {
-                            "id": id_display,
-                            "column": ac,
-                            "suvidha_column": sc,
-                            "admin_raw": left_raw,
-                            "suvidha_raw": right_raw,
-                            "reason": "raw_unequal_but_treated_equal",
-                        }
-                    )
-            if not changed:
-                continue
-            mismatch_map[ac] = {
-                "admin": left_fmt,
-                "suvidha": right_fmt,
-                "difference": diff_text,
-                "is_numeric": is_numeric,
-                "suv_col": sc,
-                "column_confidence": round(col_conf, 4),
-            }
-
-        if not mismatch_map:
-            return False
-
-        admin_excel_rows = (
-            [a_item["excel_row"]] if a_item.get("excel_row", -1) > 0 else []
-        )
-        suv_excel_rows = (
-            [s_item["excel_row"]] if s_item.get("excel_row", -1) > 0 else []
-        )
-        discrepancies.append(
-            {
-                "id": id_display,
-                "normalized_id": normalized_key,
-                "admin_excel_rows": admin_excel_rows,
-                "suvidha_excel_rows": suv_excel_rows,
-                "admin_count": 1,
-                "suvidha_count": 1,
-                "changed_columns": list(mismatch_map.keys()),
-                "mismatch_count": len(mismatch_map),
-                "key_match_type": key_match_type,
-                "key_confidence": round(key_confidence, 4),
-                "mismatches": mismatch_map,
-            }
-        )
-        for admin_col, diff in mismatch_map.items():
-            mismatch_details.append(
-                {
-                    "id": id_display,
-                    "normalized_id": normalized_key,
-                    "column": admin_col,
-                    "suvidha_column": diff.get("suv_col", admin_col),
-                    "admin_value": diff.get("admin", ""),
-                    "suvidha_value": diff.get("suvidha", ""),
-                    "difference": diff.get("difference", ""),
-                    "is_numeric": bool(diff.get("is_numeric")),
-                    "admin_excel_rows": admin_excel_rows,
-                    "suvidha_excel_rows": suv_excel_rows,
-                    "key_match_type": key_match_type,
-                    "key_confidence": round(key_confidence, 4),
-                }
-            )
-        return True
-
-    processed_admin_keys: set[str] = set()
-    processed_suv_keys: set[str] = set()
-
-    for a_key, s_key, key_conf, match_type in matched_key_pairs:
-        processed_admin_keys.add(a_key)
-        processed_suv_keys.add(s_key)
-        a_rows = admin_idx.get(a_key, [])
-        s_rows = suv_idx.get(s_key, [])
+    for key in sorted(common):
+        a_rows = admin_idx[key]
+        s_rows = suv_idx[key]
 
         if len(a_rows) != 1 or len(s_rows) != 1:
             duplicate_key_conflicts.append(
                 {
-                    "admin_key": a_key,
-                    "suvidha_key": s_key,
+                    "key": key,
                     "admin_count": len(a_rows),
                     "suvidha_count": len(s_rows),
-                    "match_type": match_type,
-                    "key_confidence": round(key_conf, 4),
                 }
             )
 
-        pair_count = min(len(a_rows), len(s_rows))
-        for i in range(pair_count):
-            changed = _record_mismatch(
-                a_rows[i], s_rows[i], a_key, key_conf, match_type
+        a_item = a_rows[0]
+        s_item = s_rows[0]
+        a = a_item["row"]
+        s = s_item["row"]
+        diffs: dict[str, Any] = {}
+
+        for ac, sc, confidence in col_pairs:
+            av = canonical_text(a.get(ac, ""))
+            sv = canonical_text(s.get(sc, ""))
+            if not values_equivalent_for_compare(av, sv):
+                position = admin.column_position_map.get(
+                    ac,
+                    {
+                        "df_index": admin.columns.index(ac),
+                        "excel_col": admin.columns.index(ac) + 1,
+                    },
+                )
+                diffs[ac] = {
+                    "admin": av,
+                    "suvidha": sv,
+                    "suv_col": sc,
+                    "confidence": round(confidence, 4),
+                    "df_index": position["df_index"],
+                    "excel_col": position["excel_col"],
+                }
+
+        if diffs:
+            discrepancies.append(
+                {
+                    "key": a_item["display_key"] or key,
+                    "normalized_key": key,
+                    "row_index": a_item["df_row_index"],
+                    "admin_excel_row": a_item["excel_row"],
+                    "suvidha_excel_row": s_item["excel_row"],
+                    "admin_row": a,
+                    "suv_row": s,
+                    "diffs": diffs,
+                }
             )
-            if not changed:
-                matching_records += 1
+        else:
+            matching_records += 1
 
-        # FIX (Bug 2): Extra rows from duplicate keys are tracked in
-        # only_admin_rows / only_suv_rows only.  The original code also
-        # called _record_mismatch(extra, None, ...) here, causing every
-        # non-empty admin field to be flagged as a mismatch against "".
-        for extra in a_rows[pair_count:]:
-            only_admin_rows.append(extra["row"])
-        for extra in s_rows[pair_count:]:
-            only_suv_rows.append(extra["row"])
+    only_admin_rows = [
+        item["row"] for key in sorted(only_admin_keys) for item in admin_idx[key]
+    ]
+    only_suv_rows = [
+        item["row"] for key in sorted(only_suv_keys) for item in suv_idx[key]
+    ]
 
-    # FIX (Bug 2): Unmatched rows go to only_admin_rows / only_suv_rows.
-    # The original code additionally called _record_mismatch(item, None, ...)
-    # which inflated discrepancy counts and polluted the Excel report.
-    for a_key, a_rows in admin_idx.items():
-        if a_key in processed_admin_keys:
-            continue
-        for item in a_rows:
-            only_admin_rows.append(item["row"])
-
-    for s_key, s_rows in suv_idx.items():
-        if s_key in processed_suv_keys:
-            continue
-        for item in s_rows:
-            only_suv_rows.append(item["row"])
-
-    debug_info = {
-        "total_keys": len(admin_keys | suv_keys),
-        "matched_keys": len(matched_key_pairs),
-        "discrepancy_count": len(discrepancies),
-        "strict_mismatch_count": strict_mismatch_count,
-        "hidden_mismatches": hidden_mismatches,
-        "hidden_mismatch_samples": hidden_mismatch_samples,
-    }
-    logger.info(
-        "Reconcile stats: total_keys=%d matched_keys=%d discrepancy_count=%d "
-        "strict_mismatch_count=%d hidden_mismatches=%d",
-        debug_info["total_keys"],
-        debug_info["matched_keys"],
-        debug_info["discrepancy_count"],
-        debug_info["strict_mismatch_count"],
-        debug_info["hidden_mismatches"],
-    )
-    if hidden_mismatch_samples:
-        logger.info("Hidden mismatch samples: %s", hidden_mismatch_samples[:5])
-
-    out = {
+    return {
         "discrepancies": discrepancies,
-        "mismatch_details": mismatch_details,
         "only_admin_rows": only_admin_rows,
         "only_suv_rows": only_suv_rows,
         "col_pairs": [
             {"admin_col": a, "suv_col": s, "confidence": round(c, 4)}
-            for a, s, c in compare_pairs
+            for a, s, c in col_pairs
         ],
         "admin_key": admin_key,
         "suv_key": suv_key,
-        "admin_cols": [a for a, _, _ in compare_pairs],
-        "suv_cols": [s for _, s, _ in compare_pairs],
+        "admin_cols": admin.columns,
+        "suv_cols": suv.columns,
         "admin_column_position_map": admin.column_position_map,
         "meta": {
-            "compared_keys": len(matched_key_pairs),
+            "compared_keys": len(common),
             "duplicate_key_conflicts": duplicate_key_conflicts,
             "admin_missing_keys": admin_missing_keys,
             "suvidha_missing_keys": suv_missing_keys,
             "unmapped_admin_cols": [
                 c for c in admin.columns if c != admin_key and c not in pair_lookup
             ],
-            "key_pairs_compared": len(matched_key_pairs),
         },
         "stats": {
             "total": len(admin_keys | suv_keys),
@@ -1165,12 +998,11 @@ def reconcile(
             "only_s": len(only_suv_rows),
         },
     }
-    if debug_mode:
-        out["debug"] = debug_info
-    return out
 
 
-# ── Excel report generation ───────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Excel output
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _border() -> Border:
@@ -1194,99 +1026,268 @@ def _style_cell(
     cell.border = _border()
 
 
-def generate_discrepancy_report(result: dict) -> io.BytesIO:
-    """
-    Generate mismatch-only Excel report.
-    Output sheet: "Mismatched Records"
+_REPORT_EXCLUDE_SUBSTRINGS: list[str] = [
+    "ક્રમ",
+    "નંબર",
+]
+_REPORT_EXCLUDE_NORM_KEYS: set[str] = {
+    "no",
+    "sr",
+    "srno",
+    "sno",
+    "serialno",
+    "number",
+    "slno",
+    "seq",
+}
 
-    FIX (Bug 1): Removed the unused `admin: ParsedDataset` parameter.
-    The original signature was generate_discrepancy_report(admin, result) but
-    `admin` was never referenced inside the function body.  All callers have
-    been updated to pass only `result`.
+# Normalized key fragments that identify "name / identifier" columns.
+# These columns are ALWAYS shown in the discrepancy sheet even if they did
+# not themselves mismatch, so the reader knows whose record is on each row.
+_IDENTIFIER_NORM_FRAGMENTS: tuple[str, ...] = (
+    "name",
+    "naam",
+    "id",
+    "code",
+    "account",
+    "acc",
+    "member",
+    # Gujarati / Hindi fragments
+    "નામ",
+    "સભ્ય",
+    "ખાતા",
+)
+
+
+def _is_report_excluded_column(col_name: str) -> bool:
+    text = canonical_text(col_name)
+    for sub in _REPORT_EXCLUDE_SUBSTRINGS:
+        if sub in text:
+            return True
+    nk = normalize_column_key(col_name)
+    return nk in _REPORT_EXCLUDE_NORM_KEYS
+
+
+def _is_identifier_column(col_name: str) -> bool:
+    """
+    Returns True for columns that identify the record (name, ID, account, etc.).
+    These are always shown in the discrepancy sheet so the reader knows whose
+    row they are looking at, even if that column itself didn't mismatch.
+    """
+    nk = normalize_column_key(col_name)
+    for frag in _IDENTIFIER_NORM_FRAGMENTS:
+        if frag in nk:
+            return True
+    return False
+
+
+def generate_discrepancy_report(
+    admin: ParsedDataset,
+    result: dict,
+) -> io.BytesIO:
+    """
+    Build the discrepancy Excel report.
+
+    Layout
+    ------
+    Sheet 1 — "Discrepancies"  : paired Admin/Suvidha rows for every mismatch.
+                                 Each row shows ONLY:
+                                   • the key column used for matching
+                                   • identifier columns (name, account, etc.)
+                                   • the columns that actually differ
+                                 All other columns are left blank so the reader
+                                 can focus immediately on what changed.
+    Sheet 2 — "Only in Admin"  : rows present only in the Admin file
+    Sheet 3 — "Only in Suvidha": rows present only in the Suvidha file
     """
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Mismatched Records"
 
-    C_HDR_BG = "1A1814"
-    C_HDR_FG = "FFFFFF"
-    C_ADMIN_DIFF = "F5C4B3"
-    C_SUV_DIFF = "B8E3D0"
-    C_NEUTRAL = "F8F7F4"
-    C_ADMIN_FG = "B5451B"
-    C_SUV_FG = "1A6B4A"
+    # ── colours ───────────────────────────────────────────────────────────────
+    HEADER_FILL = "1F4E78"
+    ADMIN_BG = "FFF3EE"
+    SUVIDHA_BG = "F0FBF7"
+    ADMIN_SRC_FILL = "FF8A65"
+    SUVIDHA_SRC_FILL = "4DD0A4"
+    ONLY_ADMIN_FILL = "EF9A9A"
+    ONLY_SUV_FILL = "80DEEA"
+    SEP_FILL = "E8EAF0"
+    BLANK_FILL = "F9FAFB"  # very light grey for intentionally-blank cells
+    red_font = Font(color="C0392B", bold=True, name="Calibri", size=10)
 
-    col_pairs = result.get("col_pairs", [])
-    compare_cols = [p.get("admin_col", "") for p in col_pairs if p.get("admin_col")]
-    headers = ["Source", "ID"] + compare_cols
-    for ci, hdr in enumerate(headers, start=1):
-        c = ws.cell(row=1, column=ci, value=excel_safe_text(hdr))
-        _style_cell(c, fill_hex=C_HDR_BG, bold=True, color=C_HDR_FG)
+    # ── 1. Build filtered column list ─────────────────────────────────────────
+    filtered_cols: list[str] = [
+        c for c in admin.columns if not _is_report_excluded_column(c)
+    ]
+    if not filtered_cols:
+        filtered_cols = admin.columns
 
-    discrepancies = result.get("discrepancies", [])
-    row_no = 2
-    for disc in discrepancies:
-        mismatch_map = disc.get("mismatches", {})
-        if not mismatch_map:
-            continue
+    SOURCE_COL = 1
+    col_to_excel: dict[str, int] = {c: i + 2 for i, c in enumerate(filtered_cols)}
 
-        admin_row_no = row_no
-        suv_row_no = row_no + 1
-        ws.cell(row=admin_row_no, column=1, value="Admin")
-        ws.cell(row=admin_row_no, column=2, value=excel_safe_text(disc.get("id", "")))
-        ws.cell(row=suv_row_no, column=1, value="Suvidha")
-        ws.cell(row=suv_row_no, column=2, value=excel_safe_text(disc.get("id", "")))
+    suv_col_lookup: dict[str, str] = {
+        p["admin_col"]: p["suv_col"] for p in result.get("col_pairs", [])
+    }
+
+    admin_key_col: str = result.get("admin_key", "")
+
+    def _write_header_row(ws, cols: list[str], fill: str) -> None:
+        src_hdr = ws.cell(row=1, column=SOURCE_COL, value="Source")
+        _style_cell(src_hdr, fill_hex=fill, bold=True, color="FFFFFF", align="center")
+        ws.column_dimensions[get_column_letter(SOURCE_COL)].width = 10
+        for col_name, excel_col in {c: i + 2 for i, c in enumerate(cols)}.items():
+            cell = ws.cell(row=1, column=excel_col, value=excel_safe_text(col_name))
+            _style_cell(
+                cell,
+                fill_hex=fill,
+                bold=True,
+                color="FFFFFF",
+                align="center",
+                wrap=True,
+            )
+            ws.column_dimensions[get_column_letter(excel_col)].width = min(
+                max(len(excel_safe_text(col_name)) + 6, 14), 45
+            )
+
+    def _write_simple_header(ws, cols: list[str], fill: str) -> None:
+        for i, col_name in enumerate(cols, start=1):
+            cell = ws.cell(row=1, column=i, value=excel_safe_text(col_name))
+            _style_cell(
+                cell,
+                fill_hex=fill,
+                bold=True,
+                color="FFFFFF",
+                align="center",
+                wrap=True,
+            )
+            ws.column_dimensions[get_column_letter(i)].width = min(
+                max(len(excel_safe_text(col_name)) + 6, 14), 45
+            )
+
+    # ── 2. Sheet 1 — Discrepancies ────────────────────────────────────────────
+    ws_disc = wb.active
+    ws_disc.title = "Discrepancies"
+
+    _write_header_row(ws_disc, filtered_cols, HEADER_FILL)
+    current_row = 2
+
+    for disc in result.get("discrepancies", []):
+        admin_row: dict[str, str] = disc.get("admin_row", {})
+        suv_row: dict[str, str] = disc.get("suv_row", {})
+        diffs: dict[str, Any] = disc.get("diffs", {})
+        diff_set = set(diffs.keys())
+
+        # Columns that should be populated (mismatched + identifiers + key col).
+        # Everything else gets a blank cell with a subtle grey background so the
+        # reader immediately sees which fields actually changed.
+        def _should_show(col_name: str) -> bool:
+            if col_name == admin_key_col:
+                return True
+            if col_name in diff_set:
+                return True
+            if _is_identifier_column(col_name):
+                return True
+            return False
+
+        # ── Admin row ─────────────────────────────────────────────────────────
+        src_cell = ws_disc.cell(row=current_row, column=SOURCE_COL, value="Admin")
         _style_cell(
-            ws.cell(row=admin_row_no, column=1),
-            fill_hex=C_ADMIN_DIFF,
-            color=C_ADMIN_FG,
-            bold=True,
-        )
-        _style_cell(
-            ws.cell(row=admin_row_no, column=2),
-            fill_hex=C_ADMIN_DIFF,
-            color=C_ADMIN_FG,
-            bold=True,
-        )
-        _style_cell(
-            ws.cell(row=suv_row_no, column=1),
-            fill_hex=C_SUV_DIFF,
-            color=C_SUV_FG,
-            bold=True,
-        )
-        _style_cell(
-            ws.cell(row=suv_row_no, column=2),
-            fill_hex=C_SUV_DIFF,
-            color=C_SUV_FG,
-            bold=True,
+            src_cell, fill_hex=ADMIN_SRC_FILL, bold=True, color="FFFFFF", align="center"
         )
 
-        for ci, col in enumerate(compare_cols, start=3):
-            diff = mismatch_map.get(col)
-            admin_cell = ws.cell(row=admin_row_no, column=ci, value="")
-            suv_cell = ws.cell(row=suv_row_no, column=ci, value="")
-            if diff:
-                admin_cell.value = excel_safe_text(diff.get("admin", ""))
-                suv_cell.value = excel_safe_text(diff.get("suvidha", ""))
-                _style_cell(
-                    admin_cell, fill_hex=C_ADMIN_DIFF, color=C_ADMIN_FG, bold=True
-                )
-                _style_cell(suv_cell, fill_hex=C_SUV_DIFF, color=C_SUV_FG, bold=True)
+        for col_name, excel_col in col_to_excel.items():
+            cell = ws_disc.cell(row=current_row, column=excel_col)
+            if not _should_show(col_name):
+                # Intentionally blank — just apply a subtle background
+                cell.value = ""
+                cell.fill = PatternFill("solid", start_color=BLANK_FILL)
+                cell.border = _border()
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            elif col_name in diff_set:
+                # Mismatched value — highlight in red
+                cell.value = excel_safe_text(admin_row.get(col_name, ""))
+                cell.font = red_font
+                cell.fill = PatternFill("solid", start_color="FDECEA")
+                cell.border = _border()
+                cell.alignment = Alignment(horizontal="left", vertical="center")
             else:
-                _style_cell(admin_cell, fill_hex=C_NEUTRAL)
-                _style_cell(suv_cell, fill_hex=C_NEUTRAL)
+                # Key / identifier column — show normally
+                cell.value = excel_safe_text(admin_row.get(col_name, ""))
+                _style_cell(cell, fill_hex=ADMIN_BG)
 
-        row_no += 2
+        current_row += 1
 
-    if row_no == 2:
-        ws.cell(row=2, column=1, value="No mismatched records found.")
-        _style_cell(ws.cell(row=2, column=1), fill_hex=C_NEUTRAL)
-
-    for col_cells in ws.columns:
-        length = max((len(str(c.value or "")) for c in col_cells), default=8)
-        ws.column_dimensions[get_column_letter(col_cells[0].column)].width = min(
-            length + 4, 42
+        # ── Suvidha row ───────────────────────────────────────────────────────
+        src_cell = ws_disc.cell(row=current_row, column=SOURCE_COL, value="Suvidha")
+        _style_cell(
+            src_cell,
+            fill_hex=SUVIDHA_SRC_FILL,
+            bold=True,
+            color="FFFFFF",
+            align="center",
         )
+
+        for col_name, excel_col in col_to_excel.items():
+            cell = ws_disc.cell(row=current_row, column=excel_col)
+            if not _should_show(col_name):
+                cell.value = ""
+                cell.fill = PatternFill("solid", start_color=BLANK_FILL)
+                cell.border = _border()
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            elif col_name in diff_set:
+                # Suvidha's value for this mismatched column
+                val = diffs[col_name].get("suvidha", "")
+                cell.value = excel_safe_text(val)
+                cell.font = red_font
+                cell.fill = PatternFill("solid", start_color="E8F8F3")
+                cell.border = _border()
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            else:
+                # Key / identifier — resolve through suv_col_lookup
+                suv_col = suv_col_lookup.get(col_name, col_name)
+                val = suv_row.get(suv_col, suv_row.get(col_name, ""))
+                cell.value = excel_safe_text(val)
+                _style_cell(cell, fill_hex=SUVIDHA_BG)
+
+        current_row += 1
+
+        # ── Thin separator row ────────────────────────────────────────────────
+        total_cols = len(filtered_cols) + 1
+        for c in range(1, total_cols + 1):
+            sep = ws_disc.cell(row=current_row, column=c, value="")
+            sep.fill = PatternFill("solid", start_color=SEP_FILL)
+            sep.border = _border()
+        ws_disc.row_dimensions[current_row].height = 4
+        current_row += 1
+
+    # ── 3. Sheet 2 — Only in Admin ────────────────────────────────────────────
+    only_admin_rows: list[dict] = result.get("only_admin_rows", [])
+    ws_oa = wb.create_sheet(title="Only in Admin")
+    _write_simple_header(ws_oa, filtered_cols, ONLY_ADMIN_FILL)
+    for row_idx, row in enumerate(only_admin_rows, start=2):
+        for col_idx, col_name in enumerate(filtered_cols, start=1):
+            cell = ws_oa.cell(
+                row=row_idx,
+                column=col_idx,
+                value=excel_safe_text(row.get(col_name, "")),
+            )
+            _style_cell(cell, fill_hex="FFEBEE")
+
+    # ── 4. Sheet 3 — Only in Suvidha ─────────────────────────────────────────
+    only_suv_rows: list[dict] = result.get("only_suv_rows", [])
+    suv_cols: list[str] = result.get("suv_cols", filtered_cols)
+    suv_filtered_cols = [
+        c for c in suv_cols if not _is_report_excluded_column(c)
+    ] or suv_cols
+    ws_os = wb.create_sheet(title="Only in Suvidha")
+    _write_simple_header(ws_os, suv_filtered_cols, ONLY_SUV_FILL)
+    for row_idx, row in enumerate(only_suv_rows, start=2):
+        for col_idx, col_name in enumerate(suv_filtered_cols, start=1):
+            cell = ws_os.cell(
+                row=row_idx,
+                column=col_idx,
+                value=excel_safe_text(row.get(col_name, "")),
+            )
+            _style_cell(cell, fill_hex="E0F7FA")
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -1294,7 +1295,9 @@ def generate_discrepancy_report(result: dict) -> io.BytesIO:
     return buf
 
 
-# ── Flask request helpers ─────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Flask routes
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _parse_optional_int(form_value: str | None) -> int | None:
@@ -1320,24 +1323,8 @@ def _resolve_key_column(selected_key: str, available_columns: list[str]) -> str:
         if normalize_column_key(col) == target_norm:
             return col
     raise ReconciliationError(
-        f"Key column '{selected_key}' was not found in the detected columns. "
-        f"Available: {available_columns}"
+        f"Key column '{selected_key}' not found in detected columns."
     )
-
-
-def _parse_header_params(
-    form, admin_prefix: str = "admin", suv_prefix: str = "suv"
-) -> tuple[int | None, int | None, int | None, int | None]:
-    """Extract and validate all four header override parameters from form data."""
-    return (
-        _parse_optional_int(form.get(f"{admin_prefix}_header_row")),
-        _parse_optional_int(form.get(f"{admin_prefix}_header_span")),
-        _parse_optional_int(form.get(f"{suv_prefix}_header_row")),
-        _parse_optional_int(form.get(f"{suv_prefix}_header_span")),
-    )
-
-
-# ── Flask routes ──────────────────────────────────────────────────────────────
 
 
 @app.route("/")
@@ -1352,9 +1339,16 @@ def get_columns():
     if not admin_file or not suv_file:
         return jsonify({"error": "Both files are required."}), 400
     try:
-        a_hr, a_hs, s_hr, s_hs = _parse_header_params(request.form)
-        admin = parse_uploaded_dataset(admin_file, a_hr, a_hs)
-        suv = parse_uploaded_dataset(suv_file, s_hr, s_hs)
+        admin = parse_uploaded_dataset(
+            admin_file,
+            _parse_optional_int(request.form.get("admin_header_row")),
+            _parse_optional_int(request.form.get("admin_header_span")),
+        )
+        suv = parse_uploaded_dataset(
+            suv_file,
+            _parse_optional_int(request.form.get("suv_header_row")),
+            _parse_optional_int(request.form.get("suv_header_span")),
+        )
         return jsonify(
             {
                 "admin_cols": admin.columns,
@@ -1378,7 +1372,6 @@ def get_columns():
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error("get_columns: %s\n%s", e, traceback.format_exc())
         return jsonify({"error": f"Failed to parse files: {e}"}), 500
 
 
@@ -1406,7 +1399,6 @@ def header_preview():
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error("header_preview: %s\n%s", e, traceback.format_exc())
         return jsonify({"error": f"Preview failed: {e}"}), 500
 
 
@@ -1423,20 +1415,21 @@ def run_reconcile():
         return jsonify({"error": "Key columns must be selected."}), 400
 
     try:
-        a_hr, a_hs, s_hr, s_hs = _parse_header_params(request.form)
-        debug_mode = str(request.form.get("debug", "")).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
+        admin = parse_uploaded_dataset(
+            admin_file,
+            _parse_optional_int(request.form.get("admin_header_row")),
+            _parse_optional_int(request.form.get("admin_header_span")),
         )
-        admin = parse_uploaded_dataset(admin_file, a_hr, a_hs)
-        suv = parse_uploaded_dataset(suv_file, s_hr, s_hs)
+        suv = parse_uploaded_dataset(
+            suv_file,
+            _parse_optional_int(request.form.get("suv_header_row")),
+            _parse_optional_int(request.form.get("suv_header_span")),
+        )
 
         admin_key = _resolve_key_column(admin_key_raw, admin.columns)
         suv_key = _resolve_key_column(suv_key_raw, suv.columns)
 
-        result = reconcile(admin, suv, admin_key, suv_key, debug_mode=debug_mode)
+        result = reconcile(admin, suv, admin_key, suv_key)
         result["ingestion"] = {
             "admin": {
                 "detected_header_row": admin.header_row_index + 1,
@@ -1460,7 +1453,6 @@ def run_reconcile():
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error("run_reconcile: %s\n%s", e, traceback.format_exc())
         return jsonify({"error": f"Reconciliation failed: {e}"}), 500
 
 
@@ -1475,21 +1467,29 @@ def download():
         return jsonify({"error": "Both files and key columns are required."}), 400
 
     try:
-        a_hr, a_hs, s_hr, s_hs = _parse_header_params(request.form)
-        admin = parse_uploaded_dataset(admin_file, a_hr, a_hs)
-        suv = parse_uploaded_dataset(suv_file, s_hr, s_hs)
+        admin = parse_uploaded_dataset(
+            admin_file,
+            _parse_optional_int(request.form.get("admin_header_row")),
+            _parse_optional_int(request.form.get("admin_header_span")),
+        )
+        suv = parse_uploaded_dataset(
+            suv_file,
+            _parse_optional_int(request.form.get("suv_header_row")),
+            _parse_optional_int(request.form.get("suv_header_span")),
+        )
 
         admin_key = _resolve_key_column(admin_key_raw, admin.columns)
         suv_key = _resolve_key_column(suv_key_raw, suv.columns)
 
         result = reconcile(admin, suv, admin_key, suv_key)
-        # FIX (Bug 1): generate_discrepancy_report no longer takes `admin`.
-        buf = generate_discrepancy_report(result)
+        buf = generate_discrepancy_report(admin, result)
 
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error("download: %s\n%s", e, traceback.format_exc())
+        import traceback
+
+        print(f"Download error: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Failed to generate Excel report: {e}"}), 500
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1501,10 +1501,7 @@ def download():
     )
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
-    os.makedirs("static", exist_ok=True)
     print("\nGrambook Reconciliation Tool")
     print("http://localhost:5000\n")
     app.run(debug=True, port=5000)
