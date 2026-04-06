@@ -4,300 +4,895 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Grambook Reconciliation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;500;600;700&display=swap');
-
 :root {
-  --bg:       #0d0f14;
-  --surface:  #13161e;
-  --card:     #1a1e2a;
-  --border:   #252b3b;
-  --accent:   #4f8ef7;
-  --accent2:  #38d9a9;
-  --warn:     #ff7043;
-  --text:     #e8eaf0;
-  --muted:    #7b859e;
-  --adm:      #ff8a65;
-  --suv:      #4dd0a4;
-  --oa:       #ef5350;
-  --os:       #26c6da;
-  --ok:       #66bb6a;
+  --bg:        #f8f7f4;
+  --surface:   #ffffff;
+  --card:      #ffffff;
+  --border:    #e5e2db;
+  --border2:   #d0ccc4;
+  --ink:       #1a1814;
+  --ink2:      #4a4740;
+  --muted:     #928e87;
+  --rule:      #c8c4bc;
+
+  --admin-h:   #b5451b;
+  --admin-l:   #fdf1ed;
+  --admin-m:   #f0d5cc;
+  --suv-h:     #1a6b4a;
+  --suv-l:     #edf5f1;
+  --suv-m:     #c8e5d8;
+
+  --accent:    #2c4a8c;
+  --accent-l:  #eef1f9;
+  --warn:      #b5451b;
+  --ok:        #1a6b4a;
+  --only-a:    #b5451b;
+  --only-s:    #1a6b4a;
+
+  --shadow-sm: 0 1px 3px rgba(26,24,20,.07), 0 1px 2px rgba(26,24,20,.04);
+  --shadow-md: 0 4px 16px rgba(26,24,20,.08), 0 2px 6px rgba(26,24,20,.05);
+  --shadow-lg: 0 12px 40px rgba(26,24,20,.1), 0 4px 12px rgba(26,24,20,.06);
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
 }
-*{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;}
-body::before{content:'';position:fixed;inset:0;z-index:0;background-image:linear-gradient(rgba(79,142,247,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(79,142,247,.04) 1px,transparent 1px);background-size:48px 48px;pointer-events:none;}
-.wrap{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:0 24px 80px;}
 
-/* HEADER */
-header{display:flex;align-items:center;gap:16px;padding:36px 0 40px;border-bottom:1px solid var(--border);margin-bottom:48px;}
-.logo{width:46px;height:46px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:12px;display:grid;place-items:center;font-size:22px;flex-shrink:0;box-shadow:0 0 24px rgba(79,142,247,.35);}
-header h1{font-size:1.5rem;font-weight:700;letter-spacing:-.025em;}
-header h1 span{color:var(--accent);}
-header p{font-size:.78rem;color:var(--muted);margin-top:4px;font-weight:300;}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* UPLOAD GRID */
-.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px;}
-@media(max-width:620px){.upload-grid{grid-template-columns:1fr;}}
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
 
-.upload-card{background:var(--card);border:1.5px dashed var(--border);border-radius:16px;padding:28px 24px;cursor:pointer;transition:border-color .2s,background .2s;position:relative;overflow:hidden;}
-.upload-card::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at 80% 20%,rgba(79,142,247,.04),transparent 60%);pointer-events:none;}
-.upload-card:hover,.upload-card.dragover{border-color:var(--accent);background:rgba(79,142,247,.05);}
-.upload-card.ready{border-style:solid;border-color:var(--accent2);background:rgba(56,217,169,.04);}
-.upload-card input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:0;}
-.uc-tag{display:inline-flex;align-items:center;gap:6px;font-size:.67rem;font-family:'DM Mono',monospace;letter-spacing:.09em;text-transform:uppercase;margin-bottom:14px;padding:4px 10px;border-radius:20px;background:var(--surface);}
-.uc-tag.adm{color:var(--adm);}
-.uc-tag.suv{color:var(--suv);}
-.uc-icon{font-size:2.2rem;margin-bottom:12px;display:block;}
-.upload-card h3{font-size:.95rem;font-weight:600;margin-bottom:5px;}
-.upload-card .hint{font-size:.74rem;color:var(--muted);}
-.file-ready{display:none;margin-top:14px;align-items:center;gap:8px;font-size:.78rem;color:var(--accent2);font-family:'DM Mono',monospace;}
-.file-ready .icon{font-size:1rem;}
-.upload-card.ready .file-ready{display:flex;}
-.upload-card.ready .placeholder{display:none;}
+/* subtle grain texture */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: .4;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='.06'/%3E%3C/svg%3E");
+}
 
-/* MAPPING PANEL */
-.map-panel{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:28px;margin-bottom:24px;display:none;}
-.map-panel.show{display:block;animation:fadeIn .3s ease;}
-.map-panel h2{font-size:.95rem;font-weight:600;margin-bottom:5px;}
-.map-panel p{font-size:.75rem;color:var(--muted);margin-bottom:22px;}
-.map-panel .header-config{margin-bottom:24px;padding:20px;background:rgba(79,142,247,.05);border-radius:12px;border:1px solid rgba(79,142,247,.2);}
-.map-panel .header-config h3{font-size:.85rem;font-weight:600;margin-bottom:8px;color:var(--accent);}
-.map-panel .header-config p{font-size:.7rem;color:var(--muted);margin-bottom:16px;}
-.map-panel .header-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
-.map-row{display:grid;grid-template-columns:1fr 44px 1fr;align-items:end;gap:12px;}
-.map-field label{display:block;font-size:.68rem;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:7px;}
-.map-field label.adm{color:var(--adm);}
-.map-field label.suv{color:var(--suv);}
-.map-field select{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:10px 13px;color:var(--text);font-family:'DM Mono',monospace;font-size:.78rem;outline:none;cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%237b859e' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;}
-.map-field select:focus{border-color:var(--accent);}
-.map-arrow{text-align:center;color:var(--muted);font-size:1.2rem;padding-bottom:10px;}
+.wrap {
+  position: relative;
+  z-index: 1;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 28px 100px;
+}
 
-/* SUBMIT */
-.btn-wrap{display:flex;justify-content:center;margin-bottom:40px;}
-.btn-submit{background:linear-gradient(135deg,var(--accent),#3a6ee8);border:none;border-radius:12px;padding:14px 52px;font-size:1rem;font-weight:600;color:#fff;cursor:pointer;font-family:'Sora',sans-serif;letter-spacing:-.01em;transition:opacity .2s,transform .15s,box-shadow .2s;box-shadow:0 4px 24px rgba(79,142,247,.4);display:flex;align-items:center;gap:10px;}
-.btn-submit:hover:not(:disabled){opacity:.9;transform:translateY(-2px);box-shadow:0 8px 32px rgba(79,142,247,.5);}
-.btn-submit:disabled{opacity:.38;cursor:not-allowed;transform:none;}
+/* ── HEADER ── */
+header {
+  padding: 52px 0 44px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 56px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
 
-/* STATS */
-.stats-bar{display:none;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:36px;}
-.stats-bar.show{display:grid;}
-@media(max-width:700px){.stats-bar{grid-template-columns:repeat(2,1fr);}}
-.stat{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px 16px;text-align:center;}
-.stat .num{font-size:2rem;font-weight:700;font-family:'DM Mono',monospace;}
-.stat .lbl{font-size:.67rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:5px;}
-.stat.ok .num{color:var(--ok);}
-.stat.disc .num{color:var(--warn);}
-.stat.oa .num{color:var(--oa);}
-.stat.os .num{color:var(--os);}
+.header-left {}
 
-/* ERROR BANNER */
-.err-banner{background:rgba(239,83,80,.12);border:1px solid var(--oa);border-radius:10px;padding:12px 18px;font-size:.82rem;color:var(--oa);margin-bottom:20px;display:none;}
-.err-banner.show{display:block;}
+.wordmark {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
 
-/* RESULTS */
-#results{display:none;}
-#results.show{display:block;animation:fadeIn .4s ease;}
+.wordmark-icon {
+  width: 34px;
+  height: 34px;
+  background: var(--ink);
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  flex-shrink: 0;
+  position: relative;
+  top: -1px;
+}
 
-.section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px;}
-.section-head h2{font-size:1rem;font-weight:600;}
-.btn-dl{background:var(--surface);border:1px solid var(--accent2);color:var(--accent2);border-radius:9px;padding:9px 20px;font-size:.8rem;font-weight:500;cursor:pointer;font-family:'Sora',sans-serif;display:flex;align-items:center;gap:8px;transition:background .18s;}
-.btn-dl:hover{background:rgba(56,217,169,.1);}
-.btn-dl:disabled{opacity:.4;cursor:not-allowed;}
+header h1 {
+  font-family: 'Playfair Display', serif;
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -.03em;
+  color: var(--ink);
+  line-height: 1;
+}
 
-/* TABS */
-.tabs{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap;}
-.tab{padding:8px 18px;border-radius:8px;font-size:.8rem;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--muted);transition:all .15s;user-select:none;}
-.tab:hover{border-color:var(--accent);color:var(--text);}
-.tab .badge{display:inline-block;background:rgba(255,255,255,.18);border-radius:10px;padding:1px 7px;font-size:.68rem;margin-left:6px;}
-.tab.active{color:#fff;}
-.tab[data-tab=disc].active{background:var(--warn);border-color:var(--warn);}
-.tab[data-tab=oa].active{background:var(--oa);border-color:var(--oa);}
-.tab[data-tab=os].active{background:var(--os);border-color:var(--os);}
+header h1 em {
+  font-style: normal;
+  color: var(--accent);
+}
 
-/* TABLE */
-.tbl-outer{overflow-x:auto;border-radius:12px;border:1px solid var(--border);}
-table{width:100%;border-collapse:collapse;font-size:.77rem;}
-thead tr{background:var(--surface);}
-thead th{padding:11px 14px;text-align:left;font-family:'DM Mono',monospace;font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;position:sticky;top:0;background:var(--surface);}
-tbody tr{border-bottom:1px solid var(--border);transition:background .1s;}
-tbody tr:last-child{border-bottom:none;}
-td{padding:10px 14px;vertical-align:middle;}
+header .tagline {
+  font-size: .82rem;
+  color: var(--muted);
+  font-weight: 300;
+  letter-spacing: .01em;
+  max-width: 420px;
+  line-height: 1.6;
+}
 
-/* disc pair rows */
-tr.a-row td{background:rgba(255,138,101,.07);}
-tr.s-row td{background:rgba(77,208,164,.07);}
-tr.a-row td.diff{background:rgba(255,138,101,.28);color:var(--adm);font-weight:700;}
-tr.s-row td.diff{background:rgba(77,208,164,.25);color:var(--suv);font-weight:700;}
-tr.sep td{padding:2px;background:var(--bg);}
+.header-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 30px;
+  font-size: .72rem;
+  font-family: 'DM Mono', monospace;
+  color: var(--muted);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  box-shadow: var(--shadow-sm);
+  white-space: nowrap;
+}
 
-.badge-src{display:inline-block;padding:2px 8px;border-radius:4px;font-family:'DM Mono',monospace;font-size:.64rem;font-weight:600;letter-spacing:.04em;}
-.badge-src.a{background:rgba(255,138,101,.18);color:var(--adm);}
-.badge-src.s{background:rgba(77,208,164,.18);color:var(--suv);}
+.header-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  background: var(--ok);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: pulse-dot 2.5s ease-in-out infinite;
+}
 
-tr.oa-row td{background:rgba(239,83,80,.055);}
-tr.os-row td{background:rgba(38,198,218,.055);}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .5; transform: scale(1.3); }
+}
 
-.empty{padding:52px;text-align:center;color:var(--muted);font-size:.85rem;}
-.empty .ico{font-size:2.5rem;margin-bottom:12px;}
+/* ── SECTION LABEL ── */
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'DM Mono', monospace;
+  font-size: .67rem;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: var(--muted);
+  margin-bottom: 20px;
+}
 
-/* SPINNER */
-.spin{display:inline-block;width:17px;height:17px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:rot .65s linear infinite;}
-@keyframes rot{to{transform:rotate(360deg);}}
-@keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:none;}}
+.section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── UPLOAD GRID ── */
+.upload-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 640px) { .upload-grid { grid-template-columns: 1fr; } }
+
+.upload-card {
+  background: var(--surface);
+  border: 1.5px dashed var(--border2);
+  border-radius: var(--r-lg);
+  padding: 32px 28px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: border-color .2s, box-shadow .2s, transform .15s;
+  box-shadow: var(--shadow-sm);
+}
+
+.upload-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-lg);
+  pointer-events: none;
+  transition: opacity .2s;
+  opacity: 0;
+}
+
+.upload-card:hover {
+  border-style: solid;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.upload-card.admin:hover { border-color: var(--admin-h); }
+.upload-card.admin:hover::after { background: var(--admin-l); opacity: .3; }
+.upload-card.suvidha:hover { border-color: var(--suv-h); }
+.upload-card.suvidha:hover::after { background: var(--suv-l); opacity: .3; }
+
+.upload-card.dragover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+.upload-card.admin.dragover { border-color: var(--admin-h); border-style: solid; }
+.upload-card.suvidha.dragover { border-color: var(--suv-h); border-style: solid; }
+
+.upload-card.ready { border-style: solid; }
+.upload-card.admin.ready { border-color: var(--admin-h); background: var(--admin-l); }
+.upload-card.suvidha.ready { border-color: var(--suv-h); background: var(--suv-l); }
+
+.upload-card input[type=file] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 0;
+}
+
+.uc-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'DM Mono', monospace;
+  font-size: .66rem;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  margin-bottom: 18px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.admin .uc-source { color: var(--admin-h); background: var(--admin-m); }
+.suvidha .uc-source { color: var(--suv-h); background: var(--suv-m); }
+
+.uc-icon {
+  font-size: 2rem;
+  display: block;
+  margin-bottom: 14px;
+  line-height: 1;
+}
+
+.upload-card h3 {
+  font-size: .95rem;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  margin-bottom: 6px;
+}
+
+.upload-card .hint {
+  font-size: .76rem;
+  color: var(--muted);
+  font-weight: 300;
+}
+
+.file-ready {
+  display: none;
+  margin-top: 16px;
+  align-items: center;
+  gap: 9px;
+  font-family: 'DM Mono', monospace;
+  font-size: .76rem;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+}
+
+.admin .file-ready { color: var(--admin-h); background: var(--admin-m); }
+.suvidha .file-ready { color: var(--suv-h); background: var(--suv-m); }
+.upload-card.ready .file-ready { display: flex; }
+.upload-card.ready .placeholder { display: none; }
+
+/* ── MAP PANEL ── */
+.map-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 32px;
+  margin-bottom: 20px;
+  display: none;
+  box-shadow: var(--shadow-sm);
+  animation: fadeUp .3s ease;
+}
+
+.map-panel.show { display: block; }
+
+.map-panel-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 1.1rem;
+  font-weight: 500;
+  letter-spacing: -.02em;
+  margin-bottom: 6px;
+}
+
+.map-panel-sub {
+  font-size: .78rem;
+  color: var(--muted);
+  margin-bottom: 28px;
+  font-weight: 300;
+}
+
+.header-config {
+  background: var(--accent-l);
+  border: 1px solid rgba(44,74,140,.15);
+  border-radius: var(--r-md);
+  padding: 22px 24px;
+  margin-bottom: 28px;
+}
+
+.header-config-title {
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 4px;
+  letter-spacing: -.01em;
+}
+
+.header-config-sub {
+  font-size: .73rem;
+  color: var(--muted);
+  margin-bottom: 18px;
+  font-weight: 300;
+}
+
+.header-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.header-row:last-child { margin-bottom: 0; }
+
+.map-row {
+  display: grid;
+  grid-template-columns: 1fr 48px 1fr;
+  align-items: end;
+  gap: 14px;
+}
+
+.map-field label {
+  display: block;
+  font-family: 'DM Mono', monospace;
+  font-size: .67rem;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  color: var(--muted);
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.map-field label.adm { color: var(--admin-h); }
+.map-field label.suv { color: var(--suv-h); }
+
+.map-field select {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--r-sm);
+  padding: 10px 36px 10px 13px;
+  color: var(--ink);
+  font-family: 'DM Mono', monospace;
+  font-size: .78rem;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23928e87' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  transition: border-color .15s, box-shadow .15s;
+  box-shadow: var(--shadow-sm);
+}
+
+.map-field select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(44,74,140,.1);
+}
+
+.map-arrow {
+  text-align: center;
+  color: var(--muted);
+  font-size: 1.1rem;
+  padding-bottom: 10px;
+  opacity: .5;
+}
+
+/* ── DIVIDER ── */
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 32px 0;
+}
+
+/* ── SUBMIT BTN ── */
+.btn-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 52px;
+}
+
+.btn-submit {
+  background: var(--ink);
+  border: none;
+  border-radius: var(--r-md);
+  padding: 15px 56px;
+  font-size: .92rem;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  letter-spacing: -.01em;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: background .18s, transform .15s, box-shadow .18s;
+  box-shadow: 0 2px 8px rgba(26,24,20,.2);
+}
+
+.btn-submit:hover:not(:disabled) {
+  background: #2c2a25;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(26,24,20,.22);
+}
+
+.btn-submit:disabled {
+  background: var(--rule);
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* ── STATS ── */
+.stats-bar {
+  display: none;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-bottom: 44px;
+  animation: fadeUp .4s ease;
+}
+
+.stats-bar.show { display: grid; }
+
+@media (max-width: 700px) { .stats-bar { grid-template-columns: repeat(2, 1fr); } }
+
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 20px 18px;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+}
+
+.stat::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--border);
+}
+
+.stat.ok::before { background: var(--ok); }
+.stat.disc::before { background: var(--warn); }
+.stat.oa::before { background: var(--admin-h); }
+.stat.os::before { background: var(--suv-h); }
+
+.stat .num {
+  font-family: 'Playfair Display', serif;
+  font-size: 2.1rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.stat.ok .num { color: var(--ok); }
+.stat.disc .num { color: var(--warn); }
+.stat.oa .num { color: var(--admin-h); }
+.stat.os .num { color: var(--suv-h); }
+
+.stat .lbl {
+  font-size: .66rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  margin-top: 7px;
+  font-family: 'DM Mono', monospace;
+}
+
+/* ── ERROR ── */
+.err-banner {
+  background: #fff8f6;
+  border: 1px solid var(--admin-m);
+  border-left: 3px solid var(--admin-h);
+  border-radius: var(--r-sm);
+  padding: 13px 18px;
+  font-size: .82rem;
+  color: var(--admin-h);
+  margin-bottom: 24px;
+  display: none;
+}
+
+.err-banner.show { display: block; }
+
+/* ── RESULTS ── */
+#results { display: none; }
+#results.show { display: block; animation: fadeUp .4s ease; }
+
+.results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 22px;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.results-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 1.2rem;
+  font-weight: 500;
+  letter-spacing: -.02em;
+}
+
+.btn-dl {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  color: var(--ink2);
+  border-radius: var(--r-sm);
+  padding: 9px 20px;
+  font-size: .8rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background .15s, border-color .15s;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-dl:hover { background: var(--bg); border-color: var(--ink); }
+.btn-dl:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── TABS ── */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+
+.tab {
+  padding: 10px 18px;
+  font-size: .8rem;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--muted);
+  border: none;
+  background: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color .15s, border-color .15s;
+  user-select: none;
+  letter-spacing: -.01em;
+}
+
+.tab:hover { color: var(--ink); }
+
+.tab .badge {
+  display: inline-block;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: .65rem;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.tab.active { color: var(--ink); }
+.tab[data-tab=disc].active { color: var(--warn); border-bottom-color: var(--warn); }
+.tab[data-tab=oa].active { color: var(--admin-h); border-bottom-color: var(--admin-h); }
+.tab[data-tab=os].active { color: var(--suv-h); border-bottom-color: var(--suv-h); }
+
+/* ── TABLE ── */
+.tbl-outer {
+  overflow-x: auto;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .77rem;
+}
+
+thead tr { background: var(--bg); }
+
+thead th {
+  padding: 11px 14px;
+  text-align: left;
+  font-family: 'DM Mono', monospace;
+  font-size: .64rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+
+tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
+tbody tr:last-child { border-bottom: none; }
+td { padding: 10px 14px; vertical-align: middle; }
+
+/* disc rows */
+tr.a-row td { background: rgba(181,69,27,.04); }
+tr.s-row td { background: rgba(26,107,74,.04); }
+tr.a-row td.diff { background: rgba(181,69,27,.12); color: var(--admin-h); font-weight: 600; }
+tr.s-row td.diff { background: rgba(26,107,74,.12); color: var(--suv-h); font-weight: 600; }
+tr.sep td { padding: 3px; background: var(--bg); }
+
+.badge-src {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 4px;
+  font-family: 'DM Mono', monospace;
+  font-size: .63rem;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.badge-src.a { background: var(--admin-m); color: var(--admin-h); }
+.badge-src.s { background: var(--suv-m); color: var(--suv-h); }
+
+tr.oa-row td { background: rgba(181,69,27,.04); }
+tr.os-row td { background: rgba(26,107,74,.04); }
+
+tr.a-row:hover td { background: rgba(181,69,27,.07); }
+tr.s-row:hover td { background: rgba(26,107,74,.07); }
+tr.oa-row:hover td { background: rgba(181,69,27,.07); }
+tr.os-row:hover td { background: rgba(26,107,74,.07); }
+
+/* ── EMPTY ── */
+.empty {
+  padding: 64px;
+  text-align: center;
+  color: var(--muted);
+  font-size: .85rem;
+}
+
+.empty .ico { font-size: 2.4rem; margin-bottom: 12px; display: block; }
+.empty strong { display: block; color: var(--ink2); margin-bottom: 4px; font-weight: 500; }
+
+/* ── SPINNER ── */
+.spin {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: rot .65s linear infinite;
+}
+
+/* ── FOOTER ── */
+.footer {
+  margin-top: 64px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: 'DM Mono', monospace;
+  font-size: .66rem;
+  color: var(--muted);
+  letter-spacing: .06em;
+}
+
+@keyframes rot { to { transform: rotate(360deg); } }
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (max-width: 640px) {
+  header { flex-direction: column; align-items: flex-start; padding: 36px 0 32px; }
+  .header-badge { align-self: flex-start; }
+  header h1 { font-size: 1.6rem; }
+  .map-row { grid-template-columns: 1fr; }
+  .map-arrow { display: none; }
+  .header-row { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
 <div class="wrap">
 
-<!-- HEADER -->
-<header>
-  <div class="logo">⚖️</div>
-  <div>
-    <h1>Grambook <span>Reconciliation</span></h1>
-    <p>Upload Admin &amp; Suvidha exports → instantly compare every field → download discrepancy report</p>
-  </div>
-</header>
-
-<!-- ERROR -->
-<div class="err-banner" id="errBanner"></div>
-
-<!-- UPLOAD -->
-<div class="upload-grid">
-  <div class="upload-card" id="adminCard">
-    <input type="file" id="adminFile" accept=".xlsx,.xls,.csv"/>
-    <div class="uc-tag adm">⬡ GrambookAdmin</div>
-    <div class="placeholder">
-      <span class="uc-icon">📋</span>
-      <h3>Admin Excel File</h3>
-      <p class="hint">Drop or click — .xlsx / .xls / .csv</p>
-    </div>
-    <div class="file-ready" id="adminReady"><span class="icon">✓</span><span id="adminFname"></span></div>
-  </div>
-
-  <div class="upload-card" id="suvidhaCard">
-    <input type="file" id="suvidhaFile" accept=".xlsx,.xls,.csv"/>
-    <div class="uc-tag suv">⬡ GrambookSuvidha</div>
-    <div class="placeholder">
-      <span class="uc-icon">🌐</span>
-      <h3>Suvidha Excel File</h3>
-      <p class="hint">Drop or click — .xlsx / .xls / .csv</p>
-    </div>
-    <div class="file-ready" id="suvidhaReady"><span class="icon">✓</span><span id="suvidhaFname"></span></div>
-  </div>
-</div>
-
-<!-- MAPPING -->
-<div class="map-panel" id="mapPanel">
-  <h2>🔗 Configure Data Import</h2>
-  <p>Pick the column in each file that uniquely identifies the same record (e.g. Property ID, Citizen Code, Transaction No).</p>
-  <!-- Header Configuration -->
-  <div class="header-config">
-    <h3>📋 Header Configuration</h3>
-    <p>Configure how many rows contain header information (titles, test types, etc.)</p>
-    <div class="header-row">
-      <div class="map-field">
-        <label class="adm">Admin — header row start</label>
-        <select id="adminHeaderRow">
-          <option value="">Auto-detect</option>
-          <option value="1">Row 1</option>
-          <option value="2">Row 2</option>
-          <option value="3">Row 3</option>
-          <option value="4">Row 4</option>
-          <option value="5">Row 5</option>
-        </select>
+  <!-- HEADER -->
+  <header>
+    <div class="header-left">
+      <div class="wordmark">
+        <div class="wordmark-icon">⚖️</div>
+        <h1>Grambook <em>Reconciliation</em></h1>
       </div>
-      <div class="map-field">
-        <label class="adm">Admin — header span</label>
-        <select id="adminHeaderSpan">
-          <option value="">Auto-detect</option>
-          <option value="1">1 row</option>
-          <option value="2">2 rows</option>
-          <option value="3">3 rows</option>
-          <option value="4">4 rows</option>
-          <option value="5">5 rows</option>
-        </select>
+      <p class="tagline">Upload Admin &amp; Suvidha exports — compare every field — download your discrepancy report.</p>
+    </div>
+    <div class="header-badge">Data Audit Tool</div>
+  </header>
+
+  <!-- ERROR -->
+  <div class="err-banner" id="errBanner"></div>
+
+  <!-- SECTION: UPLOAD -->
+  <div class="section-label">01 — Upload Files</div>
+
+  <div class="upload-grid">
+    <div class="upload-card admin" id="adminCard">
+      <input type="file" id="adminFile" accept=".xlsx,.xls,.csv"/>
+      <div class="placeholder">
+        <div class="uc-source">⬡ GrambookAdmin</div>
+        <span class="uc-icon">📋</span>
+        <h3>Admin Excel File</h3>
+        <p class="hint">Drop file here or click to browse — .xlsx / .xls / .csv</p>
+      </div>
+      <div class="file-ready" id="adminReady"><span>✓</span><span id="adminFname"></span></div>
+    </div>
+
+    <div class="upload-card suvidha" id="suvidhaCard">
+      <input type="file" id="suvidhaFile" accept=".xlsx,.xls,.csv"/>
+      <div class="placeholder">
+        <div class="uc-source">⬡ GrambookSuvidha</div>
+        <span class="uc-icon">🌐</span>
+        <h3>Suvidha Excel File</h3>
+        <p class="hint">Drop file here or click to browse — .xlsx / .xls / .csv</p>
+      </div>
+      <div class="file-ready" id="suvidhaReady"><span>✓</span><span id="suvidhaFname"></span></div>
+    </div>
+  </div>
+
+  <!-- MAPPING -->
+  <div class="map-panel" id="mapPanel">
+    <div class="section-label" style="margin-bottom:18px">02 — Configure Mapping</div>
+    <p class="map-panel-sub">Select the column in each file that uniquely identifies the same record (e.g. Property ID, Citizen Code, Transaction No).</p>
+
+    <div class="header-config">
+      <div class="header-config-title">Header Configuration</div>
+      <p class="header-config-sub">Configure how many rows contain header information (titles, test types, etc.)</p>
+      <div class="header-row">
+        <div class="map-field">
+          <label class="adm">Admin — header row start</label>
+          <select id="adminHeaderRow">
+            <option value="">Auto-detect</option>
+            <option value="1">Row 1</option>
+            <option value="2">Row 2</option>
+            <option value="3">Row 3</option>
+            <option value="4">Row 4</option>
+            <option value="5">Row 5</option>
+          </select>
+        </div>
+        <div class="map-field">
+          <label class="adm">Admin — header span</label>
+          <select id="adminHeaderSpan">
+            <option value="">Auto-detect</option>
+            <option value="1">1 row</option>
+            <option value="2">2 rows</option>
+            <option value="3">3 rows</option>
+            <option value="4">4 rows</option>
+            <option value="5">5 rows</option>
+          </select>
+        </div>
+      </div>
+      <div class="header-row">
+        <div class="map-field">
+          <label class="suv">Suvidha — header row start</label>
+          <select id="suvidhaHeaderRow">
+            <option value="">Auto-detect</option>
+            <option value="1">Row 1</option>
+            <option value="2">Row 2</option>
+            <option value="3">Row 3</option>
+            <option value="4">Row 4</option>
+            <option value="5">Row 5</option>
+          </select>
+        </div>
+        <div class="map-field">
+          <label class="suv">Suvidha — header span</label>
+          <select id="suvidhaHeaderSpan">
+            <option value="">Auto-detect</option>
+            <option value="1">1 row</option>
+            <option value="2">2 rows</option>
+            <option value="3">3 rows</option>
+            <option value="4">4 rows</option>
+            <option value="5">5 rows</option>
+          </select>
+        </div>
       </div>
     </div>
-    <div class="header-row">
+
+    <div class="map-row">
       <div class="map-field">
-        <label class="suv">Suvidha — header row start</label>
-        <select id="suvidhaHeaderRow">
-          <option value="">Auto-detect</option>
-          <option value="1">Row 1</option>
-          <option value="2">Row 2</option>
-          <option value="3">Row 3</option>
-          <option value="4">Row 4</option>
-          <option value="5">Row 5</option>
-        </select>
+        <label class="adm">Admin — key column</label>
+        <select id="adminKey"></select>
       </div>
+      <div class="map-arrow">⇄</div>
       <div class="map-field">
-        <label class="suv">Suvidha — header span</label>
-        <select id="suvidhaHeaderSpan">
-          <option value="">Auto-detect</option>
-          <option value="1">1 row</option>
-          <option value="2">2 rows</option>
-          <option value="3">3 rows</option>
-          <option value="4">4 rows</option>
-          <option value="5">5 rows</option>
-        </select>
+        <label class="suv">Suvidha — key column</label>
+        <select id="suvidhaKey"></select>
       </div>
     </div>
   </div>
-  <div class="map-row">
-    <div class="map-field">
-      <label class="adm">Admin — key column</label>
-      <select id="adminKey"></select>
+
+  <!-- SUBMIT -->
+  <div class="btn-wrap">
+    <button class="btn-submit" id="submitBtn" disabled>
+      <span id="btnTxt">Compare Files</span>
+      <span id="btnIco">→</span>
+    </button>
+  </div>
+
+  <!-- STATS -->
+  <div class="stats-bar" id="statsBar">
+    <div class="stat"><div class="num" id="sTotal">0</div><div class="lbl">Total Records</div></div>
+    <div class="stat ok"><div class="num" id="sMatch">0</div><div class="lbl">Matching</div></div>
+    <div class="stat disc"><div class="num" id="sDisc">0</div><div class="lbl">Discrepancies</div></div>
+    <div class="stat oa"><div class="num" id="sOA">0</div><div class="lbl">Only in Admin</div></div>
+    <div class="stat os"><div class="num" id="sOS">0</div><div class="lbl">Only in Suvidha</div></div>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="results">
+    <div class="results-header">
+      <div class="results-title">Comparison Results</div>
+      <button class="btn-dl" id="dlBtn">⬇&nbsp; Download Report (.xlsx)</button>
     </div>
-    <div class="map-arrow">⇄</div>
-    <div class="map-field">
-      <label class="suv">Suvidha — key column</label>
-      <select id="suvidhaKey"></select>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="disc">Discrepancies <span class="badge" id="tDisc">0</span></div>
+      <div class="tab" data-tab="oa">Only in Admin <span class="badge" id="tOA">0</span></div>
+      <div class="tab" data-tab="os">Only in Suvidha <span class="badge" id="tOS">0</span></div>
     </div>
+
+    <div id="tabContent"></div>
   </div>
-</div>
 
-<!-- SUBMIT -->
-<div class="btn-wrap">
-  <button class="btn-submit" id="submitBtn" disabled>
-    <span id="btnTxt">Compare Files</span>
-    <span id="btnIco">→</span>
-  </button>
-</div>
-
-<!-- STATS -->
-<div class="stats-bar" id="statsBar">
-  <div class="stat"><div class="num" id="sTotal">0</div><div class="lbl">Total Records</div></div>
-  <div class="stat ok"><div class="num" id="sMatch">0</div><div class="lbl">Matching</div></div>
-  <div class="stat disc"><div class="num" id="sDisc">0</div><div class="lbl">Discrepancies</div></div>
-  <div class="stat oa"><div class="num" id="sOA">0</div><div class="lbl">Only in Admin</div></div>
-  <div class="stat os"><div class="num" id="sOS">0</div><div class="lbl">Only in Suvidha</div></div>
-</div>
-
-<!-- RESULTS -->
-<div id="results">
-  <div class="section-head">
-    <h2>Comparison Results</h2>
-    <button class="btn-dl" id="dlBtn">⬇&nbsp; Download Report (.xlsx)</button>
+  <!-- FOOTER -->
+  <div class="footer">
+    <span>Grambook Reconciliation</span>
+    <span>Internal Audit Tool</span>
   </div>
-  <div class="tabs">
-    <div class="tab active" data-tab="disc">Discrepancies <span class="badge" id="tDisc">0</span></div>
-    <div class="tab" data-tab="oa">Only in Admin <span class="badge" id="tOA">0</span></div>
-    <div class="tab" data-tab="os">Only in Suvidha <span class="badge" id="tOS">0</span></div>
-  </div>
-  <div id="tabContent"></div>
-</div>
 
-</div><!-- /wrap -->
+</div>
 
 <script>
-// ── state ──────────────────────────────────────────────────────────────────
+// ── state ────────────────────────────────────────────────────────────────────
 let adminFile   = null;
 let suvidhaFile = null;
 let lastResult  = null;
 let activeTab   = 'disc';
 let fetching    = false;
 
-// ── file pickers ──────────────────────────────────────────────────────────
+// ── file pickers ─────────────────────────────────────────────────────────────
 function setupPicker(inputId, cardId, nameId, readyId, which) {
   const input = document.getElementById(inputId);
   const card  = document.getElementById(cardId);
@@ -325,21 +920,20 @@ setupPicker('suvidhaFile', 'suvidhaCard', 'suvidhaFname', 'suvidhaReady', 'suvid
 
 function checkBothUploaded() {
   if (!adminFile || !suvidhaFile) return;
-  // ask backend for column lists
   const fd = new FormData();
   fd.append('admin_file',   adminFile);
   fd.append('suvidha_file', suvidhaFile);
-  fd.append('admin_header_row', document.getElementById('adminHeaderRow').value);
+  fd.append('admin_header_row',  document.getElementById('adminHeaderRow').value);
   fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
-  fd.append('suv_header_row', document.getElementById('suvidhaHeaderRow').value);
-  fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
+  fd.append('suv_header_row',    document.getElementById('suvidhaHeaderRow').value);
+  fd.append('suv_header_span',   document.getElementById('suvidhaHeaderSpan').value);
 
   fetch('/api/columns', { method: 'POST', body: fd })
     .then(r => r.json())
     .then(data => {
       if (data.error) { showErr(data.error); return; }
-      populateSel('adminKey', data.admin_cols, ['id', 'no', 'num', 'code', 'ref', 'adm'], data.admin_col_meta || []);
-      populateSel('suvidhaKey', data.suv_cols, ['admin', 'id', 'no', 'num', 'code', 'ref'], data.suv_col_meta || []);
+      populateSel('adminKey',   data.admin_cols, ['id','no','num','code','ref','adm'], data.admin_col_meta || []);
+      populateSel('suvidhaKey', data.suv_cols,   ['admin','id','no','num','code','ref'], data.suv_col_meta || []);
       document.getElementById('mapPanel').classList.add('show');
       document.getElementById('submitBtn').disabled = false;
     })
@@ -368,7 +962,8 @@ function populateSel(selId, cols, pref, colMeta) {
   let html = '';
   groupNames.forEach(g => {
     const opts = groups[g].map((item, idx) => {
-      const label = (g === 'Other') ? item.label : (groups[g].length > 1 ? `${item.label} ${idx + 1}` : item.label);
+      const label = (g === 'Other') ? item.label
+        : (groups[g].length > 1 ? `${item.label} ${idx + 1}` : item.label);
       return `<option value="${esc(item.value)}">${esc(label)}</option>`;
     }).join('');
     html += g === 'Other' ? opts : `<optgroup label="${esc(g)}">${opts}</optgroup>`;
@@ -383,7 +978,7 @@ function populateSel(selId, cols, pref, colMeta) {
   if (guess) sel.value = guess;
 }
 
-['adminHeaderRow', 'adminHeaderSpan', 'suvidhaHeaderRow', 'suvidhaHeaderSpan'].forEach(id => {
+['adminHeaderRow','adminHeaderSpan','suvidhaHeaderRow','suvidhaHeaderSpan'].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener('change', () => {
@@ -391,21 +986,20 @@ function populateSel(selId, cols, pref, colMeta) {
   });
 });
 
-// ── submit ─────────────────────────────────────────────────────────────────
+// ── submit ────────────────────────────────────────────────────────────────────
 document.getElementById('submitBtn').addEventListener('click', () => {
   if (fetching) return;
-  clearErr();
-  setBusy(true);
+  clearErr(); setBusy(true);
 
   const fd = new FormData();
-  fd.append('admin_file',   adminFile);
-  fd.append('suvidha_file', suvidhaFile);
-  fd.append('admin_key',    document.getElementById('adminKey').value);
-  fd.append('suv_key',      document.getElementById('suvidhaKey').value);
-  fd.append('admin_header_row', document.getElementById('adminHeaderRow').value);
+  fd.append('admin_file',        adminFile);
+  fd.append('suvidha_file',      suvidhaFile);
+  fd.append('admin_key',         document.getElementById('adminKey').value);
+  fd.append('suv_key',           document.getElementById('suvidhaKey').value);
+  fd.append('admin_header_row',  document.getElementById('adminHeaderRow').value);
   fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
-  fd.append('suv_header_row', document.getElementById('suvidhaHeaderRow').value);
-  fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
+  fd.append('suv_header_row',    document.getElementById('suvidhaHeaderRow').value);
+  fd.append('suv_header_span',   document.getElementById('suvidhaHeaderSpan').value);
 
   fetch('/api/reconcile', { method: 'POST', body: fd })
     .then(r => r.json())
@@ -422,37 +1016,32 @@ document.getElementById('submitBtn').addEventListener('click', () => {
     .catch(e => { setBusy(false); showErr('Request failed: ' + e); });
 });
 
-  // ── download ──────────────────────────────────────────────────────────────
-  document.getElementById('dlBtn').addEventListener('click', () => {
+// ── download ─────────────────────────────────────────────────────────────────
+document.getElementById('dlBtn').addEventListener('click', () => {
   if (!adminFile || !suvidhaFile) return;
   const dl = document.getElementById('dlBtn');
   dl.disabled = true;
   dl.textContent = 'Generating…';
 
   const fd = new FormData();
-  fd.append('admin_file', adminFile);
-  fd.append('suvidha_file', suvidhaFile);
-  fd.append('admin_key', document.getElementById('adminKey').value);
-  fd.append('suv_key', document.getElementById('suvidhaKey').value);
-  fd.append('admin_header_row', document.getElementById('adminHeaderRow').value);
+  fd.append('admin_file',        adminFile);
+  fd.append('suvidha_file',      suvidhaFile);
+  fd.append('admin_key',         document.getElementById('adminKey').value);
+  fd.append('suv_key',           document.getElementById('suvidhaKey').value);
+  fd.append('admin_header_row',  document.getElementById('adminHeaderRow').value);
   fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
-  fd.append('suv_header_row', document.getElementById('suvidhaHeaderRow').value);
-  fd.append('suv_header_span', document.getElementById('suvidhaHeaderSpan').value);
+  fd.append('suv_header_row',    document.getElementById('suvidhaHeaderRow').value);
+  fd.append('suv_header_span',   document.getElementById('suvidhaHeaderSpan').value);
 
   fetch('/api/download', { method: 'POST', body: fd })
     .then(async r => {
       const ct = (r.headers.get('content-type') || '').toLowerCase();
       if (!r.ok) {
-        if (ct.includes('application/json')) {
-          const d = await r.json();
-          throw new Error(d.error || 'Download failed');
-        }
-        const txt = await r.text();
-        throw new Error(txt || 'Download failed');
+        const d = ct.includes('application/json') ? await r.json() : { error: await r.text() };
+        throw new Error(d.error || 'Download failed');
       }
       if (ct.includes('application/json')) {
-        const d = await r.json();
-        throw new Error(d.error || 'Download failed');
+        const d = await r.json(); throw new Error(d.error || 'Download failed');
       }
       return r.blob();
     })
@@ -461,9 +1050,7 @@ document.getElementById('submitBtn').addEventListener('click', () => {
       const a = document.createElement('a');
       const ts = new Date().toISOString().slice(0, 10);
       a.href = url; a.download = `grambook_reconciliation_${ts}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
       dl.disabled = false;
       dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
@@ -475,47 +1062,47 @@ document.getElementById('submitBtn').addEventListener('click', () => {
     });
 });
 
-  // ── tabs ──────────────────────────────────────────────────────────────────
+// ── tabs ──────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t =>
+  t.addEventListener('click', () => {
+    if (!lastResult) return;
+    setTab(t.dataset.tab);
+    renderTab(lastResult, t.dataset.tab);
+  })
+);
+
+function setTab(tab) {
+  activeTab = tab;
   document.querySelectorAll('.tab').forEach(t =>
-    t.addEventListener('click', () => {
-      if (!lastResult) return;
-      setTab(t.dataset.tab);
-      renderTab(lastResult, t.dataset.tab);
-    })
+    t.classList.toggle('active', t.dataset.tab === tab)
   );
+}
 
-  function setTab(tab) {
-    activeTab = tab;
-    document.querySelectorAll('.tab').forEach(t =>
-      t.classList.toggle('active', t.dataset.tab === tab)
-    );
-  }
-
-  // ── render stats ──────────────────────────────────────────────────────────
-  function renderStats(s) {
-    document.getElementById('sTotal').textContent = s.total;
-    document.getElementById('sMatch').textContent = s.matched;
-  document.getElementById('sDisc').textContent = s.disc;
-  document.getElementById('sOA').textContent = s.only_a;
-  document.getElementById('sOS').textContent = s.only_s;
-  document.getElementById('tDisc').textContent = s.disc;
-  document.getElementById('tOA').textContent = s.only_a;
-  document.getElementById('tOS').textContent = s.only_s;
+// ── render stats ──────────────────────────────────────────────────────────────
+function renderStats(s) {
+  document.getElementById('sTotal').textContent = s.total;
+  document.getElementById('sMatch').textContent = s.matched;
+  document.getElementById('sDisc').textContent  = s.disc;
+  document.getElementById('sOA').textContent    = s.only_a;
+  document.getElementById('sOS').textContent    = s.only_s;
+  document.getElementById('tDisc').textContent  = s.disc;
+  document.getElementById('tOA').textContent    = s.only_a;
+  document.getElementById('tOS').textContent    = s.only_s;
   document.getElementById('statsBar').classList.add('show');
 }
 
-  // ── render tab content ────────────────────────────────────────────────────
-  function renderTab(r, tab) {
-    const c = document.getElementById('tabContent');
-    c.innerHTML = '';
-    if (tab === 'disc') c.innerHTML = renderDisc(r);
-  if (tab === 'oa') c.innerHTML = renderOnly(r.only_admin_rows, r.admin_cols, 'oa-row');
-  if (tab === 'os') c.innerHTML = renderOnly(r.only_suv_rows, r.suv_cols, 'os-row');
+// ── render tab content ────────────────────────────────────────────────────────
+function renderTab(r, tab) {
+  const c = document.getElementById('tabContent');
+  c.innerHTML = '';
+  if (tab === 'disc') c.innerHTML = renderDisc(r);
+  if (tab === 'oa')   c.innerHTML = renderOnly(r.only_admin_rows, r.admin_cols, 'oa-row');
+  if (tab === 'os')   c.innerHTML = renderOnly(r.only_suv_rows,   r.suv_cols,   'os-row');
 }
 
-  function renderDisc(r) {
-    if (!r.discrepancies.length)
-      return `<div class="empty"><div class="ico">✅</div>All matched records are identical.</div>`;
+function renderDisc(r) {
+  if (!r.discrepancies.length)
+    return `<div class="empty"><div class="ico">✅</div><strong>All clear</strong>All matched records are identical.</div>`;
 
   const displayCols = [r.admin_key, ...r.admin_cols.filter(c => c !== r.admin_key)];
   let h = `<div class="tbl-outer"><table><thead><tr>
@@ -525,15 +1112,12 @@ document.getElementById('submitBtn').addEventListener('click', () => {
   r.discrepancies.forEach(entry => {
     const diffSet = new Set(Object.keys(entry.diffs));
 
-    // Admin row
     h += `<tr class="a-row"><td><span class="badge-src a">Admin</span></td>`;
     displayCols.forEach(c => {
-      const v = esc(String(entry.admin_row[c] ?? ''));
-      h += `<td class="${diffSet.has(c) ? 'diff' : ''}">${v}</td>`;
+      h += `<td class="${diffSet.has(c) ? 'diff' : ''}">${esc(String(entry.admin_row[c] ?? ''))}</td>`;
     });
     h += `</tr>`;
 
-    // Suvidha row
     h += `<tr class="s-row"><td><span class="badge-src s">Suvidha</span></td>`;
     displayCols.forEach(c => {
       const v = diffSet.has(c)
@@ -549,9 +1133,9 @@ document.getElementById('submitBtn').addEventListener('click', () => {
   return h + '</tbody></table></div>';
 }
 
-  function renderOnly(rows, cols, rowCls) {
-    if (!rows || !rows.length)
-      return `<div class="empty"><div class="ico">✅</div>No exclusive records found.</div>`;
+function renderOnly(rows, cols, rowCls) {
+  if (!rows || !rows.length)
+    return `<div class="empty"><div class="ico">✅</div><strong>All clear</strong>No exclusive records found.</div>`;
   let h = `<div class="tbl-outer"><table><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>`;
   rows.forEach(row => {
     h += `<tr class="${rowCls}">${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`;
@@ -559,8 +1143,10 @@ document.getElementById('submitBtn').addEventListener('click', () => {
   return h + '</tbody></table></div>';
 }
 
-  // ── helpers ───────────────────────────────────────────────────────────────
-  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+// ── helpers ───────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
 function setBusy(on) {
   fetching = on;
@@ -575,6 +1161,7 @@ function showErr(msg) {
   b.textContent = '⚠  ' + msg;
   b.classList.add('show');
 }
+
 function clearErr() {
   document.getElementById('errBanner').classList.remove('show');
 }

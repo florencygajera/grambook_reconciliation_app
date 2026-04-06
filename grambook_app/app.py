@@ -55,12 +55,26 @@ class ReconciliationError(Exception):
 
 INDIC_DIGIT_MAP = str.maketrans(
     {
-        "\u0966": "0", "\u0967": "1", "\u0968": "2", "\u0969": "3",
-        "\u096A": "4", "\u096B": "5", "\u096C": "6", "\u096D": "7",
-        "\u096E": "8", "\u096F": "9",
-        "\u0AE6": "0", "\u0AE7": "1", "\u0AE8": "2", "\u0AE9": "3",
-        "\u0AEA": "4", "\u0AEB": "5", "\u0AEC": "6", "\u0AED": "7",
-        "\u0AEE": "8", "\u0AEF": "9",
+        "\u0966": "0",
+        "\u0967": "1",
+        "\u0968": "2",
+        "\u0969": "3",
+        "\u096a": "4",
+        "\u096b": "5",
+        "\u096c": "6",
+        "\u096d": "7",
+        "\u096e": "8",
+        "\u096f": "9",
+        "\u0ae6": "0",
+        "\u0ae7": "1",
+        "\u0ae8": "2",
+        "\u0ae9": "3",
+        "\u0aea": "4",
+        "\u0aeb": "5",
+        "\u0aec": "6",
+        "\u0aed": "7",
+        "\u0aee": "8",
+        "\u0aef": "9",
     }
 )
 
@@ -86,13 +100,23 @@ class ParsedDataset:
 # Tesseract setup
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _iter_registry_tesseract_paths() -> list[str]:
     if winreg is None:
         return []
     roots = [
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
-        (winreg.HKEY_CURRENT_USER,  r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        ),
+        (
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        ),
+        (
+            winreg.HKEY_CURRENT_USER,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        ),
     ]
     found: list[str] = []
     for root, subkey in roots:
@@ -105,22 +129,36 @@ def _iter_registry_tesseract_paths() -> list[str]:
                         i += 1
                         with winreg.OpenKey(key, child_name) as child:
                             try:
-                                display_name = winreg.QueryValueEx(child, "DisplayName")[0]
+                                display_name = winreg.QueryValueEx(
+                                    child, "DisplayName"
+                                )[0]
                             except OSError:
                                 continue
                             if "tesseract" not in str(display_name).lower():
                                 continue
                             for value_name in ("InstallLocation", "UninstallString"):
                                 try:
-                                    raw = str(winreg.QueryValueEx(child, value_name)[0]).strip().strip('"')
+                                    raw = (
+                                        str(winreg.QueryValueEx(child, value_name)[0])
+                                        .strip()
+                                        .strip('"')
+                                    )
                                 except OSError:
                                     continue
                                 if not raw:
                                     continue
-                                candidate = (raw if raw.lower().endswith(".exe")
-                                             else os.path.join(raw, "tesseract.exe"))
-                                if os.path.basename(candidate).lower() == "tesseract-uninstall.exe":
-                                    candidate = os.path.join(os.path.dirname(candidate), "tesseract.exe")
+                                candidate = (
+                                    raw
+                                    if raw.lower().endswith(".exe")
+                                    else os.path.join(raw, "tesseract.exe")
+                                )
+                                if (
+                                    os.path.basename(candidate).lower()
+                                    == "tesseract-uninstall.exe"
+                                ):
+                                    candidate = os.path.join(
+                                        os.path.dirname(candidate), "tesseract.exe"
+                                    )
                                 if os.path.isdir(candidate):
                                     candidate = os.path.join(candidate, "tesseract.exe")
                                 found.append(candidate)
@@ -143,11 +181,15 @@ def _configure_tesseract() -> None:
         candidates.append(path_cmd)
     local_app_data = os.getenv("LOCALAPPDATA", "").strip()
     if local_app_data:
-        candidates.append(os.path.join(local_app_data, "Programs", "Tesseract-OCR", "tesseract.exe"))
-    candidates.extend([
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-    ])
+        candidates.append(
+            os.path.join(local_app_data, "Programs", "Tesseract-OCR", "tesseract.exe")
+        )
+    candidates.extend(
+        [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ]
+    )
     candidates.extend(_iter_registry_tesseract_paths())
     for cmd in candidates:
         if cmd and os.path.isfile(cmd):
@@ -247,6 +289,7 @@ def is_numeric_like(text: str) -> bool:
 # File parsing — CSV / XLS / XLSX → raw string matrix
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _decode_csv_bytes(file_bytes: bytes) -> io.StringIO:
     for enc in ["utf-8-sig", "utf-8", "utf-16", "cp1252", "latin1"]:
         try:
@@ -256,12 +299,17 @@ def _decode_csv_bytes(file_bytes: bytes) -> io.StringIO:
     raise ReconciliationError("CSV encoding is unsupported or file is corrupt.")
 
 
-def _normalize_row_length(matrix: list[list[str]], max_cols: int | None = None) -> list[list[str]]:
+def _normalize_row_length(
+    matrix: list[list[str]], max_cols: int | None = None
+) -> list[list[str]]:
     if not matrix:
         return matrix
     if max_cols is None:
         max_cols = max(len(r) for r in matrix)
-    return [r + [""] * (max_cols - len(r)) if len(r) < max_cols else r[:max_cols] for r in matrix]
+    return [
+        r + [""] * (max_cols - len(r)) if len(r) < max_cols else r[:max_cols]
+        for r in matrix
+    ]
 
 
 def _parse_csv_matrix(file_bytes: bytes) -> list[list[str]]:
@@ -273,7 +321,9 @@ def _parse_csv_matrix(file_bytes: bytes) -> list[list[str]]:
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
     except csv.Error:
         pass
-    matrix = [[canonical_text(cell) for cell in row] for row in csv.reader(sio, dialect)]
+    matrix = [
+        [canonical_text(cell) for cell in row] for row in csv.reader(sio, dialect)
+    ]
     return _normalize_row_length(matrix)
 
 
@@ -281,16 +331,23 @@ def _parse_xls_matrix(file_bytes: bytes) -> list[list[str]]:
     try:
         import xlrd
     except ImportError as e:
-        raise ReconciliationError(".xls file detected but xlrd is missing. Install xlrd==2.0.1") from e
+        raise ReconciliationError(
+            ".xls file detected but xlrd is missing. Install xlrd==2.0.1"
+        ) from e
     try:
         wb = xlrd.open_workbook(file_contents=file_bytes)
         sh = wb.sheet_by_index(0)
     except Exception as e:
         raise ReconciliationError(f"Unable to read .xls workbook: {e}") from e
-    matrix = [[canonical_text(sh.cell_value(r, c)) for c in range(sh.ncols)] for r in range(sh.nrows)]
+    matrix = [
+        [canonical_text(sh.cell_value(r, c)) for c in range(sh.ncols)]
+        for r in range(sh.nrows)
+    ]
     matrix = _normalize_row_length(matrix, sh.ncols)
-    for (rlo, rhi, clo, chi) in getattr(sh, "merged_cells", []):
-        top_left = matrix[rlo][clo] if rlo < len(matrix) and clo < len(matrix[rlo]) else ""
+    for rlo, rhi, clo, chi in getattr(sh, "merged_cells", []):
+        top_left = (
+            matrix[rlo][clo] if rlo < len(matrix) and clo < len(matrix[rlo]) else ""
+        )
         for rr in range(rlo, rhi):
             for cc in range(clo, chi):
                 matrix[rr][cc] = top_left
@@ -385,6 +442,7 @@ def parse_matrix_from_upload(file_storage) -> tuple[list[list[str]], str, list[s
 # Header detection
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _row_header_score(row: list[str]) -> float:
     non_empty = [canonical_text(x) for x in row if canonical_text(x)]
     if len(non_empty) < 2:
@@ -393,7 +451,9 @@ def _row_header_score(row: list[str]) -> float:
     text_ratio = text_cells / max(1, len(non_empty))
     avg_len = sum(len(x) for x in non_empty) / len(non_empty)
     long_penalty = sum(1 for x in non_empty if len(x) > 80)
-    return len(non_empty) * 0.25 + text_ratio * 2.5 - (avg_len / 120) - long_penalty * 1.2
+    return (
+        len(non_empty) * 0.25 + text_ratio * 2.5 - (avg_len / 120) - long_penalty * 1.2
+    )
 
 
 def _is_sub_header_row(row: list[str]) -> bool:
@@ -429,7 +489,9 @@ def detect_header_start(
         non_empty = [x for x in matrix[i] if x]
         if len(non_empty) < 2:
             continue
-        text_ratio = sum(1 for x in non_empty if not is_numeric_like(x)) / len(non_empty)
+        text_ratio = sum(1 for x in non_empty if not is_numeric_like(x)) / len(
+            non_empty
+        )
         if text_ratio < 0.55:
             continue
         if any(len(x) > 140 for x in non_empty):
@@ -437,7 +499,9 @@ def detect_header_start(
         scored.append((i, score))
 
     if not scored:
-        raise ReconciliationError("Could not detect a valid header row. Please use manual header override.")
+        raise ReconciliationError(
+            "Could not detect a valid header row. Please use manual header override."
+        )
 
     scored.sort(key=lambda x: x[1], reverse=True)
     best_idx = scored[0][0]
@@ -445,8 +509,12 @@ def detect_header_start(
     if _is_sub_header_row(matrix[best_idx]) and best_idx > 0:
         prev = matrix[best_idx - 1]
         prev_non_empty = [x for x in prev if x]
-        if (prev_non_empty and
-                sum(1 for x in prev_non_empty if not is_numeric_like(x)) / len(prev_non_empty) >= 0.9):
+        if (
+            prev_non_empty
+            and sum(1 for x in prev_non_empty if not is_numeric_like(x))
+            / len(prev_non_empty)
+            >= 0.9
+        ):
             return best_idx - 1, 2
 
     return best_idx, None
@@ -494,21 +562,30 @@ def _build_column_meta(
 
     out: list[dict[str, Any]] = []
     for out_idx, original_col_idx in enumerate(kept_indices):
-        header_value = headers[out_idx] if out_idx < len(headers) else f"column_{out_idx}"
-        parts = _dedupe_in_order([
-            canonical_text(hr[original_col_idx]) for hr in header_rows
-            if original_col_idx < len(hr)
-        ])
+        header_value = (
+            headers[out_idx] if out_idx < len(headers) else f"column_{out_idx}"
+        )
+        parts = _dedupe_in_order(
+            [
+                canonical_text(hr[original_col_idx])
+                for hr in header_rows
+                if original_col_idx < len(hr)
+            ]
+        )
         if not parts:
             parts = [header_value]
         group = parts[0] if len(parts) > 1 else "Other"
-        out.append({
-            "column": header_value,
-            "group": group,
-            "parts": parts,
-            "hierarchy": " > ".join(parts),
-            "hierarchy_short": " > ".join(parts[1:]) if len(parts) > 1 else header_value,
-        })
+        out.append(
+            {
+                "column": header_value,
+                "group": group,
+                "parts": parts,
+                "hierarchy": " > ".join(parts),
+                "hierarchy_short": " > ".join(parts[1:])
+                if len(parts) > 1
+                else header_value,
+            }
+        )
     return out
 
 
@@ -530,8 +607,11 @@ def build_headers(
     if forced_span is not None and manual_header_span is None:
         chosen_span = forced_span
     else:
-        spans = ([manual_header_span] if manual_header_span in (1, 2, 3, 4, 5)
-                 else [5, 4, 3, 2, 1])
+        spans = (
+            [manual_header_span]
+            if manual_header_span in (1, 2, 3, 4, 5)
+            else [5, 4, 3, 2, 1]
+        )
         chosen_span = 1
         best_score = -1.0
 
@@ -540,7 +620,9 @@ def build_headers(
                 continue
             combined = []
             for c in range(max_cols):
-                parts = _dedupe_in_order([local_rows[r][c] for r in range(span) if local_rows[r][c]])
+                parts = _dedupe_in_order(
+                    [local_rows[r][c] for r in range(span) if local_rows[r][c]]
+                )
                 combined.append(" ".join(parts).strip())
 
             non_empty = sum(1 for h in combined if h)
@@ -549,12 +631,27 @@ def build_headers(
             multi_header_bonus = 0
             for row_idx in range(span):
                 row_text = " ".join(local_rows[row_idx]).lower()
-                if any(k in row_text for k in ["baki", "test", "type", "category",
-                                                "status", "remark", "sr no", "serial",
-                                                "બાકી", "ચાલુ", "કુલ"]):
+                if any(
+                    k in row_text
+                    for k in [
+                        "baki",
+                        "test",
+                        "type",
+                        "category",
+                        "status",
+                        "remark",
+                        "sr no",
+                        "serial",
+                        "બાકી",
+                        "ચાલુ",
+                        "કુલ",
+                    ]
+                ):
                     multi_header_bonus += 2
-                if any(k in row_text for k in ["no", "number", "id", "code", "name",
-                                                "ક્રમ", "નંબર"]):
+                if any(
+                    k in row_text
+                    for k in ["no", "number", "id", "code", "name", "ક્રમ", "નંબર"]
+                ):
                     multi_header_bonus += 1
             score += multi_header_bonus
 
@@ -565,8 +662,9 @@ def build_headers(
     header_rows = local_rows[:chosen_span]
     raw_headers: list[str] = []
     for c in range(max_cols):
-        parts = _dedupe_in_order([header_rows[r][c] for r in range(chosen_span)
-                                  if header_rows[r][c]])
+        parts = _dedupe_in_order(
+            [header_rows[r][c] for r in range(chosen_span) if header_rows[r][c]]
+        )
         raw_headers.append(canonical_text(" ".join(parts)))
 
     display_headers: list[str] = []
@@ -627,9 +725,12 @@ def dataframe_from_matrix(
     max_cols = max(len(r) for r in matrix)
     matrix = _normalize_row_length(matrix, max_cols)
 
-    header_start, forced_span = detect_header_start(matrix, manual_header_row=manual_header_row)
+    header_start, forced_span = detect_header_start(
+        matrix, manual_header_row=manual_header_row
+    )
     headers, normalized_map, drop_indices, header_span = build_headers(
-        matrix, header_start,
+        matrix,
+        header_start,
         manual_header_span=manual_header_span,
         forced_span=forced_span,
     )
@@ -638,7 +739,7 @@ def dataframe_from_matrix(
     if not kept_indices:
         raise ReconciliationError("No usable columns detected after header processing.")
 
-    data_rows = matrix[header_start + header_span:]
+    data_rows = matrix[header_start + header_span :]
     aligned_rows: list[list[str]] = []
     excel_row_numbers: list[int] = []
     row_position_map: dict[int, int] = {}
@@ -675,7 +776,9 @@ def dataframe_from_matrix(
     parser_notes: list[str] = []
     if source_format == "xls":
         parser_notes.append("Legacy .xls format parsed via xlrd.")
-    parser_notes.append(f"Row mapping generated for {len(excel_row_numbers)} data rows.")
+    parser_notes.append(
+        f"Row mapping generated for {len(excel_row_numbers)} data rows."
+    )
 
     return ParsedDataset(
         rows=rows,
@@ -713,6 +816,7 @@ def parse_uploaded_dataset(
 # ──────────────────────────────────────────────────────────────────────────────
 # Reconciliation
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def _similarity(a: str, b: str) -> float:
     if not a or not b:
@@ -799,8 +903,21 @@ def reconcile(
         text = format(value.normalize(), "f").rstrip("0").rstrip(".")
         return "0" if not text or text == "-0" else text
 
-    def _detect_numeric_columns(rows: list[dict[str, str]], columns: list[str], key_col: str) -> set[str]:
-        hints = ("amount", "tax", "total", "balance", "baki", "paid", "due", "fee", "debit", "credit")
+    def _detect_numeric_columns(
+        rows: list[dict[str, str]], columns: list[str], key_col: str
+    ) -> set[str]:
+        hints = (
+            "amount",
+            "tax",
+            "total",
+            "balance",
+            "baki",
+            "paid",
+            "due",
+            "fee",
+            "debit",
+            "credit",
+        )
         numeric_cols: set[str] = set()
         for col in columns:
             if col == key_col:
@@ -809,7 +926,11 @@ def reconcile(
             if any(h in nk for h in hints):
                 numeric_cols.add(col)
                 continue
-            sample = [canonical_text(r.get(col, "")) for r in rows if canonical_text(r.get(col, ""))]
+            sample = [
+                canonical_text(r.get(col, ""))
+                for r in rows
+                if canonical_text(r.get(col, ""))
+            ]
             if not sample:
                 continue
             numeric_count = sum(1 for v in sample if _decimal_from_value(v) is not None)
@@ -850,26 +971,45 @@ def reconcile(
         return {
             "row": agg_row,
             "numeric_totals": numeric_totals,
-            "display_key": next((e["display_key"] for e in entries if e.get("display_key")), ""),
+            "display_key": next(
+                (e["display_key"] for e in entries if e.get("display_key")), ""
+            ),
             "df_row_index": entries[0]["df_row_index"] if entries else -1,
-            "excel_rows": [e["excel_row"] for e in entries if e.get("excel_row", -1) > 0],
+            "excel_rows": [
+                e["excel_row"] for e in entries if e.get("excel_row", -1) > 0
+            ],
             "count": len(entries),
         }
 
     def _is_identifier_column_name(col_name: str) -> bool:
         nk = normalize_column_key(col_name)
-        fragments = ("name", "id", "code", "account", "acc", "member", "holder", "owner")
+        fragments = (
+            "name",
+            "id",
+            "code",
+            "account",
+            "acc",
+            "member",
+            "holder",
+            "owner",
+        )
         return any(f in nk for f in fragments)
 
-    admin_idx, admin_missing_keys = _build_key_index(admin.rows, admin_key, admin.row_position_map)
-    suv_idx, suv_missing_keys = _build_key_index(suv.rows, suv_key, suv.row_position_map)
+    admin_idx, admin_missing_keys = _build_key_index(
+        admin.rows, admin_key, admin.row_position_map
+    )
+    suv_idx, suv_missing_keys = _build_key_index(
+        suv.rows, suv_key, suv.row_position_map
+    )
 
     col_pairs = map_columns_smart(admin.columns, suv.columns, admin_key, suv_key)
     pair_lookup = {a: s for a, s, _ in col_pairs}
 
     admin_numeric_cols = _detect_numeric_columns(admin.rows, admin.columns, admin_key)
     suv_numeric_cols = _detect_numeric_columns(suv.rows, suv.columns, suv_key)
-    identifier_columns = [c for c in admin.columns if c == admin_key or _is_identifier_column_name(c)]
+    identifier_columns = [
+        c for c in admin.columns if c == admin_key or _is_identifier_column_name(c)
+    ]
 
     admin_keys = set(admin_idx)
     suv_keys = set(suv_idx)
@@ -900,7 +1040,10 @@ def reconcile(
             is_numeric = ac in admin_numeric_cols or sc in suv_numeric_cols
             position = admin.column_position_map.get(
                 ac,
-                {"df_index": admin.columns.index(ac), "excel_col": admin.columns.index(ac) + 1},
+                {
+                    "df_index": admin.columns.index(ac),
+                    "excel_col": admin.columns.index(ac) + 1,
+                },
             )
             if is_numeric:
                 a_total = a_agg["numeric_totals"].get(ac, Decimal("0"))
@@ -949,14 +1092,19 @@ def reconcile(
         else:
             matching_records += 1
 
-    only_admin_rows = [item["row"] for k in sorted(only_admin_keys) for item in admin_idx[k]]
+    only_admin_rows = [
+        item["row"] for k in sorted(only_admin_keys) for item in admin_idx[k]
+    ]
     only_suv_rows = [item["row"] for k in sorted(only_suv_keys) for item in suv_idx[k]]
 
     return {
         "discrepancies": discrepancies,
         "only_admin_rows": only_admin_rows,
         "only_suv_rows": only_suv_rows,
-        "col_pairs": [{"admin_col": a, "suv_col": s, "confidence": round(c, 4)} for a, s, c in col_pairs],
+        "col_pairs": [
+            {"admin_col": a, "suv_col": s, "confidence": round(c, 4)}
+            for a, s, c in col_pairs
+        ],
         "admin_key": admin_key,
         "suv_key": suv_key,
         "admin_cols": admin.columns,
@@ -970,7 +1118,9 @@ def reconcile(
             "identifier_columns": identifier_columns,
             "admin_numeric_columns": sorted(admin_numeric_cols),
             "suvidha_numeric_columns": sorted(suv_numeric_cols),
-            "unmapped_admin_cols": [c for c in admin.columns if c != admin_key and c not in pair_lookup],
+            "unmapped_admin_cols": [
+                c for c in admin.columns if c != admin_key and c not in pair_lookup
+            ],
         },
         "stats": {
             "total": len(admin_keys | suv_keys),
@@ -986,14 +1136,20 @@ def reconcile(
 # Excel output
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _border() -> Border:
     s = Side(style="thin", color="D9D9D9")
     return Border(left=s, right=s, top=s, bottom=s)
 
 
 def _style_cell(
-    cell, *, fill_hex: str | None = None, bold: bool = False,
-    color: str = "1F2937", align: str = "left", wrap: bool = False,
+    cell,
+    *,
+    fill_hex: str | None = None,
+    bold: bool = False,
+    color: str = "1F2937",
+    align: str = "left",
+    wrap: bool = False,
 ) -> None:
     if fill_hex:
         cell.fill = PatternFill("solid", start_color=fill_hex)
@@ -1007,16 +1163,31 @@ _REPORT_EXCLUDE_SUBSTRINGS: list[str] = [
     "નંબર",
 ]
 _REPORT_EXCLUDE_NORM_KEYS: set[str] = {
-    "no", "sr", "srno", "sno", "serialno", "number", "slno", "seq",
+    "no",
+    "sr",
+    "srno",
+    "sno",
+    "serialno",
+    "number",
+    "slno",
+    "seq",
 }
 
 # Normalized key fragments that identify "name / identifier" columns.
 # These columns are ALWAYS shown in the discrepancy sheet even if they did
 # not themselves mismatch, so the reader knows whose record is on each row.
 _IDENTIFIER_NORM_FRAGMENTS: tuple[str, ...] = (
-    "name", "naam", "id", "code", "account", "acc", "member",
+    "name",
+    "naam",
+    "id",
+    "code",
+    "account",
+    "acc",
+    "member",
     # Gujarati / Hindi fragments
-    "નામ", "સભ્ય", "ખાતા",
+    "નામ",
+    "સભ્ય",
+    "ખાતા",
 )
 
 
@@ -1062,8 +1233,12 @@ def generate_discrepancy_report(
                 return col
         return ""
 
-    name_col = _pick_column(admin.columns, ("????????????", "???", "name", "holder", "owner"))
-    number_col = _pick_column(admin.columns, ("????", "number", "nambar", "no", "account", "???"))
+    name_col = _pick_column(
+        admin.columns, ("????????????", "???", "name", "holder", "owner")
+    )
+    number_col = _pick_column(
+        admin.columns, ("????", "number", "nambar", "no", "account", "???")
+    )
     kram_col = _pick_column(admin.columns, ("????", "kram", "serial", "sr", "seq"))
 
     pair_lookup = {p["admin_col"]: p["suv_col"] for p in result.get("col_pairs", [])}
@@ -1073,16 +1248,28 @@ def generate_discrepancy_report(
         admin_row = disc.get("admin_row", {})
         suv_row = disc.get("suv_row", {})
 
-        admin_name = canonical_text(admin_row.get(name_col, "")) if name_col else canonical_text(disc.get("key", ""))
-        admin_number = canonical_text(admin_row.get(number_col, "")) if number_col else ""
+        admin_name = (
+            canonical_text(admin_row.get(name_col, ""))
+            if name_col
+            else canonical_text(disc.get("key", ""))
+        )
+        admin_number = (
+            canonical_text(admin_row.get(number_col, "")) if number_col else ""
+        )
         admin_kram = canonical_text(admin_row.get(kram_col, "")) if kram_col else ""
 
         suv_name_col = pair_lookup.get(name_col, name_col) if name_col else ""
         suv_number_col = pair_lookup.get(number_col, number_col) if number_col else ""
         suv_kram_col = pair_lookup.get(kram_col, kram_col) if kram_col else ""
 
-        suv_name = canonical_text(suv_row.get(suv_name_col, "")) if suv_name_col else canonical_text(disc.get("key", ""))
-        suv_number = canonical_text(suv_row.get(suv_number_col, "")) if suv_number_col else ""
+        suv_name = (
+            canonical_text(suv_row.get(suv_name_col, ""))
+            if suv_name_col
+            else canonical_text(disc.get("key", ""))
+        )
+        suv_number = (
+            canonical_text(suv_row.get(suv_number_col, "")) if suv_number_col else ""
+        )
         suv_kram = canonical_text(suv_row.get(suv_kram_col, "")) if suv_kram_col else ""
 
         ws.cell(row=row_idx, column=1, value="Admin")
@@ -1102,8 +1289,10 @@ def generate_discrepancy_report(
     buf.seek(0)
     return buf
 
+
 # Flask routes
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def _parse_optional_int(form_value: str | None) -> int | None:
     if form_value is None:
@@ -1127,7 +1316,9 @@ def _resolve_key_column(selected_key: str, available_columns: list[str]) -> str:
     for col in available_columns:
         if normalize_column_key(col) == target_norm:
             return col
-    raise ReconciliationError(f"Key column '{selected_key}' not found in detected columns.")
+    raise ReconciliationError(
+        f"Key column '{selected_key}' not found in detected columns."
+    )
 
 
 @app.route("/")
@@ -1142,30 +1333,36 @@ def get_columns():
     if not admin_file or not suv_file:
         return jsonify({"error": "Both files are required."}), 400
     try:
-        admin = parse_uploaded_dataset(admin_file,
-                                       _parse_optional_int(request.form.get("admin_header_row")),
-                                       _parse_optional_int(request.form.get("admin_header_span")))
-        suv = parse_uploaded_dataset(suv_file,
-                                     _parse_optional_int(request.form.get("suv_header_row")),
-                                     _parse_optional_int(request.form.get("suv_header_span")))
-        return jsonify({
-            "admin_cols": admin.columns,
-            "admin_col_meta": admin.column_meta,
-            "suv_cols": suv.columns,
-            "suv_col_meta": suv.column_meta,
-            "preview": {
-                "admin": {
-                    "detected_header_row": admin.header_row_index + 1,
-                    "detected_header_span": admin.header_row_span,
-                    "notes": admin.parser_notes,
+        admin = parse_uploaded_dataset(
+            admin_file,
+            _parse_optional_int(request.form.get("admin_header_row")),
+            _parse_optional_int(request.form.get("admin_header_span")),
+        )
+        suv = parse_uploaded_dataset(
+            suv_file,
+            _parse_optional_int(request.form.get("suv_header_row")),
+            _parse_optional_int(request.form.get("suv_header_span")),
+        )
+        return jsonify(
+            {
+                "admin_cols": admin.columns,
+                "admin_col_meta": admin.column_meta,
+                "suv_cols": suv.columns,
+                "suv_col_meta": suv.column_meta,
+                "preview": {
+                    "admin": {
+                        "detected_header_row": admin.header_row_index + 1,
+                        "detected_header_span": admin.header_row_span,
+                        "notes": admin.parser_notes,
+                    },
+                    "suvidha": {
+                        "detected_header_row": suv.header_row_index + 1,
+                        "detected_header_span": suv.header_row_span,
+                        "notes": suv.parser_notes,
+                    },
                 },
-                "suvidha": {
-                    "detected_header_row": suv.header_row_index + 1,
-                    "detected_header_span": suv.header_row_span,
-                    "notes": suv.parser_notes,
-                },
-            },
-        })
+            }
+        )
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
@@ -1183,14 +1380,16 @@ def header_preview():
             _parse_optional_int(request.form.get("header_row")),
             _parse_optional_int(request.form.get("header_span")),
         )
-        return jsonify({
-            "columns": parsed.columns,
-            "col_meta": parsed.column_meta,
-            "header_row": parsed.header_row_index + 1,
-            "header_span": parsed.header_row_span,
-            "sample_rows": parsed.rows[:10],
-            "notes": parsed.parser_notes,
-        })
+        return jsonify(
+            {
+                "columns": parsed.columns,
+                "col_meta": parsed.column_meta,
+                "header_row": parsed.header_row_index + 1,
+                "header_span": parsed.header_row_span,
+                "sample_rows": parsed.rows[:10],
+                "notes": parsed.parser_notes,
+            }
+        )
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
@@ -1210,12 +1409,16 @@ def run_reconcile():
         return jsonify({"error": "Key columns must be selected."}), 400
 
     try:
-        admin = parse_uploaded_dataset(admin_file,
-                                       _parse_optional_int(request.form.get("admin_header_row")),
-                                       _parse_optional_int(request.form.get("admin_header_span")))
-        suv = parse_uploaded_dataset(suv_file,
-                                     _parse_optional_int(request.form.get("suv_header_row")),
-                                     _parse_optional_int(request.form.get("suv_header_span")))
+        admin = parse_uploaded_dataset(
+            admin_file,
+            _parse_optional_int(request.form.get("admin_header_row")),
+            _parse_optional_int(request.form.get("admin_header_span")),
+        )
+        suv = parse_uploaded_dataset(
+            suv_file,
+            _parse_optional_int(request.form.get("suv_header_row")),
+            _parse_optional_int(request.form.get("suv_header_span")),
+        )
 
         admin_key = _resolve_key_column(admin_key_raw, admin.columns)
         suv_key = _resolve_key_column(suv_key_raw, suv.columns)
@@ -1258,12 +1461,16 @@ def download():
         return jsonify({"error": "Both files and key columns are required."}), 400
 
     try:
-        admin = parse_uploaded_dataset(admin_file,
-                                       _parse_optional_int(request.form.get("admin_header_row")),
-                                       _parse_optional_int(request.form.get("admin_header_span")))
-        suv = parse_uploaded_dataset(suv_file,
-                                     _parse_optional_int(request.form.get("suv_header_row")),
-                                     _parse_optional_int(request.form.get("suv_header_span")))
+        admin = parse_uploaded_dataset(
+            admin_file,
+            _parse_optional_int(request.form.get("admin_header_row")),
+            _parse_optional_int(request.form.get("admin_header_span")),
+        )
+        suv = parse_uploaded_dataset(
+            suv_file,
+            _parse_optional_int(request.form.get("suv_header_row")),
+            _parse_optional_int(request.form.get("suv_header_span")),
+        )
 
         admin_key = _resolve_key_column(admin_key_raw, admin.columns)
         suv_key = _resolve_key_column(suv_key_raw, suv.columns)
@@ -1275,6 +1482,7 @@ def download():
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         import traceback
+
         print(f"Download error: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Failed to generate Excel report: {e}"}), 500
 
