@@ -675,6 +675,113 @@ tr.s-row:hover td { background: rgba(26,107,74,.07); }
 tr.oa-row:hover td { background: rgba(181,69,27,.07); }
 tr.os-row:hover td { background: rgba(26,107,74,.07); }
 
+/* ── DATA PREVIEW ── */
+.preview-block {
+  margin-top: 28px;
+  animation: fadeUp .3s ease;
+}
+
+.preview-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-tab {
+  padding: 8px 16px;
+  font-size: .76rem;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--muted);
+  border: none;
+  background: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color .15s, border-color .15s;
+  user-select: none;
+  font-family: 'DM Sans', sans-serif;
+}
+
+.preview-tab:hover { color: var(--ink); }
+.preview-tab.admin.active  { color: var(--admin-h); border-bottom-color: var(--admin-h); }
+.preview-tab.suvidha.active { color: var(--suv-h); border-bottom-color: var(--suv-h); }
+
+.preview-pane { display: none; }
+.preview-pane.active { display: block; }
+
+.preview-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-top: none;
+  font-size: .72rem;
+  font-family: 'DM Mono', monospace;
+  color: var(--muted);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preview-meta-item { display: flex; align-items: center; gap: 6px; }
+.preview-meta-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.preview-meta-dot.admin { background: var(--admin-h); }
+.preview-meta-dot.suvidha { background: var(--suv-h); }
+
+.preview-tbl-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.preview-tbl-wrap table { font-size: .74rem; }
+
+.preview-tbl-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  white-space: nowrap;
+}
+
+.preview-tbl-wrap tbody tr.admin-preview:hover td  { background: rgba(181,69,27,.07); }
+.preview-tbl-wrap tbody tr.suvidha-preview:hover td { background: rgba(26,107,74,.07); }
+
+.preview-tbl-wrap td { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.preview-loading {
+  padding: 28px;
+  text-align: center;
+  color: var(--muted);
+  font-size: .8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+}
+
+.preview-row-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: 'DM Mono', monospace;
+  font-size: .64rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.preview-row-count.admin   { background: var(--admin-m); color: var(--admin-h); }
+.preview-row-count.suvidha { background: var(--suv-m);   color: var(--suv-h); }
+
 /* ── EMPTY ── */
 .empty {
   padding: 64px;
@@ -841,6 +948,32 @@ tr.os-row:hover td { background: rgba(26,107,74,.07); }
         <select id="suvidhaKey"></select>
       </div>
     </div>
+
+    <!-- LIVE DATA PREVIEW -->
+    <div class="preview-block" id="previewBlock" style="display:none">
+      <div class="section-label" style="margin-bottom:0">03 — Data Preview</div>
+
+      <div class="preview-tabs">
+        <div class="preview-tab admin active" data-preview="admin">
+          GrambookAdmin &nbsp;<span class="preview-row-count admin" id="adminRowCount">—</span>
+        </div>
+        <div class="preview-tab suvidha" data-preview="suvidha">
+          GrambookSuvidha &nbsp;<span class="preview-row-count suvidha" id="suvidhaRowCount">—</span>
+        </div>
+      </div>
+
+      <div id="adminPreviewPane" class="preview-pane active">
+        <div class="preview-loading" id="adminPreviewLoading"><span class="spin" style="border-color:rgba(181,69,27,.2);border-top-color:var(--admin-h)"></span> Reading rows…</div>
+        <div id="adminPreviewMeta" class="preview-meta" style="display:none"></div>
+        <div class="preview-tbl-wrap" id="adminPreviewTbl" style="display:none"></div>
+      </div>
+
+      <div id="suvidhaPreviewPane" class="preview-pane">
+        <div class="preview-loading" id="suvidhaPreviewLoading"><span class="spin" style="border-color:rgba(26,107,74,.2);border-top-color:var(--suv-h)"></span> Reading rows…</div>
+        <div id="suvidhaPreviewMeta" class="preview-meta" style="display:none"></div>
+        <div class="preview-tbl-wrap" id="suvidhaPreviewTbl" style="display:none"></div>
+      </div>
+    </div>
   </div>
 
   <!-- SUBMIT -->
@@ -891,6 +1024,7 @@ let suvidhaFile = null;
 let lastResult  = null;
 let activeTab   = 'disc';
 let fetching    = false;
+let previewData = { admin: null, suvidha: null };
 
 // ── file pickers ─────────────────────────────────────────────────────────────
 function setupPicker(inputId, cardId, nameId, readyId, which) {
@@ -918,15 +1052,118 @@ function setupPicker(inputId, cardId, nameId, readyId, which) {
 setupPicker('adminFile',   'adminCard',   'adminFname',   'adminReady',   'admin');
 setupPicker('suvidhaFile', 'suvidhaCard', 'suvidhaFname', 'suvidhaReady', 'suvidha');
 
+// ── fetch live row preview via /api/header-preview ───────────────────────────
+function fetchPreview(which) {
+  const file      = which === 'admin' ? adminFile : suvidhaFile;
+  const hrParam   = which === 'admin' ? 'adminHeaderRow'  : 'suvidhaHeaderRow';
+  const hsParam   = which === 'admin' ? 'adminHeaderSpan' : 'suvidhaHeaderSpan';
+  const loadEl    = document.getElementById(`${which}PreviewLoading`);
+  const metaEl    = document.getElementById(`${which}PreviewMeta`);
+  const tblEl     = document.getElementById(`${which}PreviewTbl`);
+  const countEl   = document.getElementById(`${which}RowCount`);
+
+  loadEl.style.display = 'flex';
+  metaEl.style.display = 'none';
+  tblEl.style.display  = 'none';
+  countEl.textContent  = '—';
+
+  const fd = new FormData();
+  fd.append('file',        file);
+  fd.append('header_row',  document.getElementById(hrParam).value);
+  fd.append('header_span', document.getElementById(hsParam).value);
+
+  fetch('/api/header-preview', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+      loadEl.style.display = 'none';
+      if (data.error) {
+        tblEl.style.display = 'block';
+        tblEl.innerHTML = `<div class="preview-loading" style="color:var(--warn)">⚠ ${esc(data.error)}</div>`;
+        return;
+      }
+      previewData[which] = data;
+      const rowCount = (data.sample_rows || []).length;
+      countEl.textContent = `${rowCount} rows`;
+
+      const notes = (data.notes || []).join(' · ') || 'No issues detected';
+      metaEl.style.display = 'flex';
+      metaEl.innerHTML = `
+        <div class="preview-meta-item">
+          <span class="preview-meta-dot ${which}"></span>
+          Header at row ${data.header_row}, span ${data.header_span}
+        </div>
+        <div class="preview-meta-item" style="color:var(--muted);font-size:.65rem">${esc(notes)}</div>`;
+
+      if (!data.columns || !data.columns.length) {
+        tblEl.style.display = 'block';
+        tblEl.innerHTML = '<div class="preview-loading">No columns detected.</div>';
+        return;
+      }
+
+      const rowClass = which === 'admin' ? 'admin-preview' : 'suvidha-preview';
+      const thBg    = which === 'admin' ? 'rgba(181,69,27,.08)' : 'rgba(26,107,74,.08)';
+      const thColor = which === 'admin' ? 'var(--admin-h)' : 'var(--suv-h)';
+      const thStyle = `background:${thBg};color:${thColor};font-family:'DM Mono',monospace;font-size:.63rem;text-transform:uppercase;letter-spacing:.07em;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap`;
+      const tdStyle = `padding:9px 12px;border-bottom:1px solid var(--border);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`;
+
+      let html = `<table><thead><tr>
+        <th style="${thStyle};color:var(--muted)">#</th>`;
+      data.columns.forEach(col => {
+        html += `<th style="${thStyle}">${esc(col)}</th>`;
+      });
+      html += `</tr></thead><tbody>`;
+
+      (data.sample_rows || []).forEach((row, idx) => {
+        html += `<tr class="${rowClass}">
+          <td style="${tdStyle};color:var(--muted);font-family:'DM Mono',monospace;font-size:.67rem">${idx + 1}</td>`;
+        data.columns.forEach(col => {
+          const val = String(row[col] ?? '');
+          html += `<td style="${tdStyle}" title="${esc(val)}">${esc(val)}</td>`;
+        });
+        html += `</tr>`;
+      });
+      html += `</tbody></table>`;
+      tblEl.style.display = 'block';
+      tblEl.innerHTML = html;
+    })
+    .catch(e => {
+      loadEl.style.display = 'none';
+      tblEl.style.display  = 'block';
+      tblEl.innerHTML = `<div class="preview-loading" style="color:var(--warn)">⚠ Could not load preview: ${esc(String(e))}</div>`;
+    });
+}
+
+// ── preview tab switching ─────────────────────────────────────────────────────
+document.querySelectorAll('.preview-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const which = tab.dataset.preview;
+    document.querySelectorAll('.preview-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('adminPreviewPane').classList.toggle('active',    which === 'admin');
+    document.getElementById('suvidhaPreviewPane').classList.toggle('active',  which === 'suvidha');
+  });
+});
+
+// ── getHeaderParams helper ────────────────────────────────────────────────────
+function getHeaderParams() {
+  return {
+    admin_header_row:  document.getElementById('adminHeaderRow').value,
+    admin_header_span: document.getElementById('adminHeaderSpan').value,
+    suv_header_row:    document.getElementById('suvidhaHeaderRow').value,
+    suv_header_span:   document.getElementById('suvidhaHeaderSpan').value,
+  };
+}
+
 function checkBothUploaded() {
   if (!adminFile || !suvidhaFile) return;
+  const p  = getHeaderParams();
   const fd = new FormData();
   fd.append('admin_file',   adminFile);
   fd.append('suvidha_file', suvidhaFile);
-  fd.append('admin_header_row',  document.getElementById('adminHeaderRow').value);
-  fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
-  fd.append('suv_header_row',    document.getElementById('suvidhaHeaderRow').value);
-  fd.append('suv_header_span',   document.getElementById('suvidhaHeaderSpan').value);
+  fd.append('admin_header_row',  p.admin_header_row);
+  fd.append('admin_header_span', p.admin_header_span);
+  fd.append('suv_header_row',    p.suv_header_row);
+  fd.append('suv_header_span',   p.suv_header_span);
 
   fetch('/api/columns', { method: 'POST', body: fd })
     .then(r => r.json())
@@ -936,6 +1173,10 @@ function checkBothUploaded() {
       populateSel('suvidhaKey', data.suv_cols,   ['admin','id','no','num','code','ref'], data.suv_col_meta || []);
       document.getElementById('mapPanel').classList.add('show');
       document.getElementById('submitBtn').disabled = false;
+      // show preview block and fetch both files in parallel
+      document.getElementById('previewBlock').style.display = 'block';
+      fetchPreview('admin');
+      fetchPreview('suvidha');
     })
     .catch(e => showErr('Could not read columns: ' + e));
 }
@@ -982,7 +1223,11 @@ function populateSel(selId, cols, pref, colMeta) {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener('change', () => {
-    if (adminFile && suvidhaFile) checkBothUploaded();
+    if (!adminFile || !suvidhaFile) return;
+    checkBothUploaded();
+    // also individually re-preview only the affected file
+    if (id.startsWith('admin') && adminFile)   fetchPreview('admin');
+    if (id.startsWith('suvidha') && suvidhaFile) fetchPreview('suvidha');
   });
 });
 
@@ -991,15 +1236,16 @@ document.getElementById('submitBtn').addEventListener('click', () => {
   if (fetching) return;
   clearErr(); setBusy(true);
 
+  const p  = getHeaderParams();
   const fd = new FormData();
-  fd.append('admin_file',        adminFile);
-  fd.append('suvidha_file',      suvidhaFile);
-  fd.append('admin_key',         document.getElementById('adminKey').value);
-  fd.append('suv_key',           document.getElementById('suvidhaKey').value);
-  fd.append('admin_header_row',  document.getElementById('adminHeaderRow').value);
-  fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
-  fd.append('suv_header_row',    document.getElementById('suvidhaHeaderRow').value);
-  fd.append('suv_header_span',   document.getElementById('suvidhaHeaderSpan').value);
+  fd.append('admin_file',   adminFile);
+  fd.append('suvidha_file', suvidhaFile);
+  fd.append('admin_key',    document.getElementById('adminKey').value);
+  fd.append('suv_key',      document.getElementById('suvidhaKey').value);
+  fd.append('admin_header_row',  p.admin_header_row);
+  fd.append('admin_header_span', p.admin_header_span);
+  fd.append('suv_header_row',    p.suv_header_row);
+  fd.append('suv_header_span',   p.suv_header_span);
 
   fetch('/api/reconcile', { method: 'POST', body: fd })
     .then(r => r.json())
@@ -1012,6 +1258,7 @@ document.getElementById('submitBtn').addEventListener('click', () => {
       setTab('disc');
       renderTab(data, 'disc');
       document.getElementById('results').classList.add('show');
+      setTimeout(() => document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
     })
     .catch(e => { setBusy(false); showErr('Request failed: ' + e); });
 });
@@ -1023,15 +1270,16 @@ document.getElementById('dlBtn').addEventListener('click', () => {
   dl.disabled = true;
   dl.textContent = 'Generating…';
 
+  const p  = getHeaderParams();
   const fd = new FormData();
-  fd.append('admin_file',        adminFile);
-  fd.append('suvidha_file',      suvidhaFile);
-  fd.append('admin_key',         document.getElementById('adminKey').value);
-  fd.append('suv_key',           document.getElementById('suvidhaKey').value);
-  fd.append('admin_header_row',  document.getElementById('adminHeaderRow').value);
-  fd.append('admin_header_span', document.getElementById('adminHeaderSpan').value);
-  fd.append('suv_header_row',    document.getElementById('suvidhaHeaderRow').value);
-  fd.append('suv_header_span',   document.getElementById('suvidhaHeaderSpan').value);
+  fd.append('admin_file',   adminFile);
+  fd.append('suvidha_file', suvidhaFile);
+  fd.append('admin_key',    document.getElementById('adminKey').value);
+  fd.append('suv_key',      document.getElementById('suvidhaKey').value);
+  fd.append('admin_header_row',  p.admin_header_row);
+  fd.append('admin_header_span', p.admin_header_span);
+  fd.append('suv_header_row',    p.suv_header_row);
+  fd.append('suv_header_span',   p.suv_header_span);
 
   fetch('/api/download', { method: 'POST', body: fd })
     .then(async r => {
