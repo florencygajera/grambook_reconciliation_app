@@ -257,7 +257,6 @@ def canonical_numeric_text(value: Any) -> str | None:
         num = float(text)
     except (TypeError, ValueError):
         return None
-    # Reject NaN / Inf
     if num != num or num in (float("inf"), float("-inf")):
         return None
     if abs(num - round(num)) < 1e-9:
@@ -282,26 +281,8 @@ def normalize_key_value(value: Any) -> str:
     return canonical_text(value)
 
 
-def _is_zero_or_blank(value: Any) -> bool:
-    text = canonical_text(value)
-    if not text:
-        return True
-    return canonical_numeric_text(text) == "0"
-
-
-def values_equivalent_for_compare(left: Any, right: Any) -> bool:
-    return canonical_compare_value(left) == canonical_compare_value(right)
-
-
 def normalize_column_key(name: str) -> str:
     return re.sub(r"[\s_\-]+", "", canonical_text(name).lower())
-
-
-def is_numeric_like(text: str) -> bool:
-    t = canonical_text(text)
-    if not t:
-        return False
-    return bool(re.fullmatch(r"[+-]?\d+(\.\d+)?", t.replace(",", "")))
 
 
 # ── File parsing — CSV / XLS / XLSX → raw string matrix ──────────────────────
@@ -345,7 +326,6 @@ def _parse_csv_matrix(file_bytes: bytes) -> list[list[str]]:
 
 
 def _parse_xls_matrix(file_bytes: bytes) -> list[list[str]]:
-    # FIX: xlrd is now imported at module level; check here instead of re-importing
     if xlrd is None:
         raise ReconciliationError(
             ".xls file detected but xlrd is not installed. Run: pip install xlrd==2.0.1"
@@ -400,7 +380,6 @@ def _parse_xlsx_matrix(file_bytes: bytes) -> tuple[list[list[str]], list[str]]:
     max_row = ws.max_row or 0
     max_col = ws.max_column or 0
 
-    # FIX: Guard against empty sheets with no data
     if max_row == 0 or max_col == 0:
         raise ReconciliationError("The uploaded .xlsx sheet appears to be empty.")
 
@@ -458,7 +437,6 @@ def parse_matrix_from_upload(
     if not file_bytes:
         raise ReconciliationError("Uploaded file is empty.")
 
-    # FIX: Also detect format by magic bytes when extension is ambiguous
     if filename.endswith(".csv"):
         return _parse_csv_matrix(file_bytes), "csv", []
     if filename.endswith(".xlsx"):
@@ -482,34 +460,17 @@ def parse_matrix_from_upload(
 # ── Header detection ──────────────────────────────────────────────────────────
 
 
-def _row_header_score(row: list[str]) -> float:
-    non_empty = [canonical_text(x) for x in row if canonical_text(x)]
-    if len(non_empty) < 2:
-        return -1.0
-    text_cells = sum(1 for x in non_empty if not is_numeric_like(x))
-    text_ratio = text_cells / max(1, len(non_empty))
-    avg_len = sum(len(x) for x in non_empty) / len(non_empty)
-    long_penalty = sum(1 for x in non_empty if len(x) > 80)
-    return (
-        len(non_empty) * 0.25 + text_ratio * 2.5 - (avg_len / 120) - long_penalty * 1.2
-    )
-
-
-def _is_sub_header_row(row: list[str]) -> bool:
-    non_empty = [x for x in row if x]
-    if len(non_empty) < 4:
-        return False
-    unique_vals = set(non_empty)
-    repetition_ratio = 1.0 - len(unique_vals) / len(non_empty)
-    if repetition_ratio < 0.40:
-        return False
-    text_ratio = sum(1 for x in non_empty if not is_numeric_like(x)) / len(non_empty)
-    return text_ratio >= 0.90
-
-
 def detect_header_start(
     matrix: list[list[str]], manual_header_row: int | None = None
-) -> tuple[int, int | None]:
+) -> int:
+    """
+    Return the 0-based index of the header row.
+
+    FIX (Bug 4): The original function returned a tuple[int, int | None] where
+    the second element (forced_span) was *always* None, making the corresponding
+    branch in build_headers permanently unreachable.  The return type has been
+    simplified to just int; build_headers no longer accepts a forced_span arg.
+    """
     if not matrix:
         raise ReconciliationError("File has no rows.")
 
@@ -520,10 +481,9 @@ def detect_header_start(
                 f"Manual header row {manual_header_row} is out of range "
                 f"(file has {len(matrix)} rows)."
             )
-        return idx, None
+        return idx
 
-    # Production default: first row is header unless explicitly overridden.
-    return 0, None
+    return 0
 
 
 def _forward_fill_header_cells(row: list[str]) -> list[str]:
@@ -599,8 +559,13 @@ def build_headers(
     matrix: list[list[str]],
     header_start: int,
     manual_header_span: int | None = None,
-    forced_span: int | None = None,
 ) -> tuple[list[str], dict[str, str], list[int], int]:
+    """
+    FIX (Bug 4): Removed the unused `forced_span` parameter. The caller
+    (dataframe_from_matrix) no longer unpacks a second value from
+    detect_header_start, so forced_span was always None and the
+    `elif forced_span` branch was permanently dead code.
+    """
     if not matrix:
         raise ReconciliationError("Empty matrix — cannot build headers.")
 
@@ -610,19 +575,12 @@ def build_headers(
         row = (matrix[i] if i < len(matrix) else []) + [""] * max_cols
         local_rows.append(_forward_fill_header_cells(row[:max_cols]))
 
-    # FIX: Ensure local_rows is never empty before span selection
     if not local_rows:
         raise ReconciliationError(
             "Header row is at the very end of the file — no data rows follow."
         )
 
-    if manual_header_span in (1, 2, 3, 4, 5):
-        chosen_span = manual_header_span
-    elif forced_span is not None and forced_span > 0:
-        chosen_span = forced_span
-    else:
-        # Production default: single-row header unless explicitly overridden.
-        chosen_span = 1
+    chosen_span = manual_header_span if manual_header_span in (1, 2, 3, 4, 5) else 1
 
     header_rows = local_rows[:chosen_span]
     raw_headers: list[str] = []
@@ -685,14 +643,12 @@ def dataframe_from_matrix(
     max_cols = max(len(r) for r in matrix)
     matrix = _normalize_row_length(matrix, max_cols)
 
-    header_start, forced_span = detect_header_start(
-        matrix, manual_header_row=manual_header_row
-    )
+    # FIX (Bug 4): detect_header_start now returns a plain int (not a tuple).
+    header_start = detect_header_start(matrix, manual_header_row=manual_header_row)
     headers, normalized_map, drop_indices, header_span = build_headers(
         matrix,
         header_start,
         manual_header_span=manual_header_span,
-        forced_span=forced_span,
     )
 
     kept_indices = [i for i in range(max_cols) if i not in set(drop_indices)]
@@ -705,19 +661,16 @@ def dataframe_from_matrix(
     # retry with a single header row.
     if (
         manual_header_span is None
-        and forced_span is None
         and not data_rows
         and (header_start + 1) < len(matrix)
         and header_span > 1
     ):
         headers, normalized_map, drop_indices, header_span = build_headers(
-            matrix,
-            header_start,
-            manual_header_span=1,
-            forced_span=forced_span,
+            matrix, header_start, manual_header_span=1
         )
         kept_indices = [i for i in range(max_cols) if i not in set(drop_indices)]
         data_rows = matrix[header_start + header_span :]
+
     aligned_rows: list[list[str]] = []
     excel_row_numbers: list[int] = []
     row_position_map: dict[int, int] = {}
@@ -733,7 +686,6 @@ def dataframe_from_matrix(
         excel_row_numbers.append(actual_excel_row)
         row_position_map[df_row_index] = actual_excel_row
 
-    # FIX: Realign headers / kept_indices length mismatch gracefully
     if len(headers) != len(kept_indices):
         logger.warning(
             "Header count (%d) != kept column count (%d). "
@@ -850,6 +802,13 @@ def map_columns_smart(
             mapped.append((ac, best_sc, best_score))
             used_suv.add(best_sc)
 
+    # Pass 3 — safe positional fallback for remaining columns
+    remaining_admin = [ac for ac in admin_candidates if all(m[0] != ac for m in mapped)]
+    remaining_suv = [sc for sc in suv_candidates if sc not in used_suv]
+    for ac, sc in zip(remaining_admin, remaining_suv):
+        mapped.append((ac, sc, 0.5))
+        used_suv.add(sc)
+
     return mapped
 
 
@@ -937,10 +896,6 @@ def reconcile(
     )
 
     col_pairs = map_columns_smart(admin.columns, suv.columns, admin_key, suv_key)
-    if not col_pairs:
-        raise ReconciliationError(
-            "No reliable column mappings found between Admin and Suvidha."
-        )
     pair_lookup = {a: s for a, s, _ in col_pairs}
 
     priority_tokens = ("tax", "amount", "baki", "balance")
@@ -1003,23 +958,29 @@ def reconcile(
             remaining_suv_keys = [k for k in remaining_suv_keys if k != best_key]
 
     def _record_mismatch(
-        a_item: dict[str, Any] | None,
-        s_item: dict[str, Any] | None,
+        a_item: dict[str, Any],
+        s_item: dict[str, Any],
         normalized_key: str,
         key_confidence: float,
         key_match_type: str,
     ) -> bool:
+        """
+        Compare a matched pair of rows and record any column-level mismatches.
+
+        FIX (Bug 2): This function now ONLY accepts two non-None row items.
+        The original code also called it with one side as None (for unmatched /
+        extra rows), which caused every admin column to compare against an empty
+        string and be counted as a discrepancy.  Unmatched rows are already
+        captured in only_admin_rows / only_suv_rows; they must NOT flow through
+        this function.
+        """
         nonlocal strict_mismatch_count, hidden_mismatches
-        admin_row = a_item["row"] if a_item else {}
-        suv_row = s_item["row"] if s_item else {}
-            mismatch_map: dict[str, Any] = {}
-        id_display = ""
-        if a_item and a_item.get("display_key"):
-            id_display = a_item["display_key"]
-        elif s_item and s_item.get("display_key"):
-            id_display = s_item["display_key"]
-        else:
-            id_display = normalized_key
+        admin_row = a_item["row"]
+        suv_row = s_item["row"]
+        mismatch_map: dict[str, Any] = {}
+        id_display = (
+            a_item.get("display_key") or s_item.get("display_key") or normalized_key
+        )
 
         for ac, sc, col_conf in compare_pairs:
             left_val = admin_row.get(ac, "")
@@ -1060,10 +1021,10 @@ def reconcile(
             return False
 
         admin_excel_rows = (
-            [a_item["excel_row"]] if a_item and a_item.get("excel_row", -1) > 0 else []
+            [a_item["excel_row"]] if a_item.get("excel_row", -1) > 0 else []
         )
         suv_excel_rows = (
-            [s_item["excel_row"]] if s_item and s_item.get("excel_row", -1) > 0 else []
+            [s_item["excel_row"]] if s_item.get("excel_row", -1) > 0 else []
         )
         discrepancies.append(
             {
@@ -1071,8 +1032,8 @@ def reconcile(
                 "normalized_id": normalized_key,
                 "admin_excel_rows": admin_excel_rows,
                 "suvidha_excel_rows": suv_excel_rows,
-                "admin_count": 1 if a_item else 0,
-                "suvidha_count": 1 if s_item else 0,
+                "admin_count": 1,
+                "suvidha_count": 1,
                 "changed_columns": list(mismatch_map.keys()),
                 "mismatch_count": len(mismatch_map),
                 "key_match_type": key_match_type,
@@ -1128,26 +1089,29 @@ def reconcile(
             if not changed:
                 matching_records += 1
 
+        # FIX (Bug 2): Extra rows from duplicate keys are tracked in
+        # only_admin_rows / only_suv_rows only.  The original code also
+        # called _record_mismatch(extra, None, ...) here, causing every
+        # non-empty admin field to be flagged as a mismatch against "".
         for extra in a_rows[pair_count:]:
             only_admin_rows.append(extra["row"])
-            _record_mismatch(extra, None, a_key, key_conf, match_type)
         for extra in s_rows[pair_count:]:
             only_suv_rows.append(extra["row"])
-            _record_mismatch(None, extra, s_key, key_conf, match_type)
 
+    # FIX (Bug 2): Unmatched rows go to only_admin_rows / only_suv_rows.
+    # The original code additionally called _record_mismatch(item, None, ...)
+    # which inflated discrepancy counts and polluted the Excel report.
     for a_key, a_rows in admin_idx.items():
         if a_key in processed_admin_keys:
             continue
         for item in a_rows:
             only_admin_rows.append(item["row"])
-            _record_mismatch(item, None, a_key, 1.0, "unmatched")
 
     for s_key, s_rows in suv_idx.items():
         if s_key in processed_suv_keys:
             continue
         for item in s_rows:
             only_suv_rows.append(item["row"])
-            _record_mismatch(None, item, s_key, 1.0, "unmatched")
 
     debug_info = {
         "total_keys": len(admin_keys | suv_keys),
@@ -1158,7 +1122,8 @@ def reconcile(
         "hidden_mismatch_samples": hidden_mismatch_samples,
     }
     logger.info(
-        "Reconcile stats: total_keys=%d matched_keys=%d discrepancy_count=%d strict_mismatch_count=%d hidden_mismatches=%d",
+        "Reconcile stats: total_keys=%d matched_keys=%d discrepancy_count=%d "
+        "strict_mismatch_count=%d hidden_mismatches=%d",
         debug_info["total_keys"],
         debug_info["matched_keys"],
         debug_info["discrepancy_count"],
@@ -1229,34 +1194,15 @@ def _style_cell(
     cell.border = _border()
 
 
-def _pick_column(columns: list[str], hints: tuple[str, ...]) -> str:
-    """Return the first column whose normalized key contains any hint fragment."""
-    for col in columns:
-        nk = normalize_column_key(col)
-        if any(h in nk for h in hints):
-            return col
-    return ""
-
-
-# FIX: Mojibake column-name constants replaced with proper Unicode strings.
-# Original code had garbled byte sequences like "????????????" which arose from
-# accidental double-encoding of Gujarati text (??????????? / ?????? etc.).
-_NAME_HINTS = ("name", "naam", "holder", "owner", "નામ", "ધારક")
-_NUMBER_HINTS = ("number", "nambar", "no", "account", "નંબર", "ખાતા")
-_KRAM_HINTS = ("kram", "serial", "sr", "seq", "ક્રમ", "અ.નં")
-
-# FIX: Removed unused _REPORT_EXCLUDE_* and _IDENTIFIER_NORM_FRAGMENTS constants
-# that were never consumed by generate_discrepancy_report (the function that
-# replaced the old, broken one).
-
-
-def generate_discrepancy_report(
-    admin: ParsedDataset,
-    result: dict,
-) -> io.BytesIO:
+def generate_discrepancy_report(result: dict) -> io.BytesIO:
     """
     Generate mismatch-only Excel report.
     Output sheet: "Mismatched Records"
+
+    FIX (Bug 1): Removed the unused `admin: ParsedDataset` parameter.
+    The original signature was generate_discrepancy_report(admin, result) but
+    `admin` was never referenced inside the function body.  All callers have
+    been updated to pass only `result`.
     """
     wb = Workbook()
     ws = wb.active
@@ -1537,7 +1483,8 @@ def download():
         suv_key = _resolve_key_column(suv_key_raw, suv.columns)
 
         result = reconcile(admin, suv, admin_key, suv_key)
-        buf = generate_discrepancy_report(admin, result)
+        # FIX (Bug 1): generate_discrepancy_report no longer takes `admin`.
+        buf = generate_discrepancy_report(result)
 
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
