@@ -1093,6 +1093,7 @@ def reconcile(
     only_suv_keys = suv_keys - admin_keys
 
     discrepancies: list[dict[str, Any]] = []
+    mismatch_details: list[dict[str, Any]] = []
     matching_records = 0
     duplicate_key_conflicts: list[dict[str, Any]] = []
 
@@ -1157,20 +1158,34 @@ def reconcile(
                     }
 
         if diffs:
+            display_key = a_agg["display_key"] or s_agg["display_key"] or key
             discrepancies.append(
                 {
-                    "key": a_agg["display_key"] or s_agg["display_key"] or key,
-                    "normalized_key": key,
-                    "row_index": a_agg["df_row_index"],
+                    "id": display_key,
+                    "normalized_id": key,
                     "admin_excel_rows": a_agg["excel_rows"],
                     "suvidha_excel_rows": s_agg["excel_rows"],
                     "admin_count": a_agg["count"],
                     "suvidha_count": s_agg["count"],
-                    "admin_row": a,
-                    "suv_row": s,
-                    "diffs": diffs,
+                    "changed_columns": sorted(diffs.keys()),
+                    "mismatch_count": len(diffs),
                 }
             )
+            for admin_col, diff in diffs.items():
+                mismatch_details.append(
+                    {
+                        "id": display_key,
+                        "normalized_id": key,
+                        "column": admin_col,
+                        "suvidha_column": diff.get("suv_col", admin_col),
+                        "admin_value": diff.get("admin", ""),
+                        "suvidha_value": diff.get("suvidha", ""),
+                        "difference": diff.get("difference", ""),
+                        "is_numeric": bool(diff.get("is_numeric")),
+                        "admin_excel_rows": a_agg["excel_rows"],
+                        "suvidha_excel_rows": s_agg["excel_rows"],
+                    }
+                )
         else:
             matching_records += 1
 
@@ -1178,9 +1193,16 @@ def reconcile(
         item["row"] for k in sorted(only_admin_keys) for item in admin_idx[k]
     ]
     only_suv_rows = [item["row"] for k in sorted(only_suv_keys) for item in suv_idx[k]]
+    mismatch_details.sort(
+        key=lambda item: (
+            canonical_text(item.get("normalized_id", "")),
+            canonical_text(item.get("column", "")),
+        )
+    )
 
     return {
         "discrepancies": discrepancies,
+        "mismatch_details": mismatch_details,
         "only_admin_rows": only_admin_rows,
         "only_suv_rows": only_suv_rows,
         "col_pairs": [
@@ -1283,14 +1305,11 @@ def generate_discrepancy_report(
     C_SUV_BG = "EDF5F1"  # suvidha row tint
     C_SUV_DIFF = "B8E3D0"  # suvidha diff cell
     C_SUV_FG = "1A6B4A"
-    C_SEP = "F0EDE8"
     C_OK_BG = "EDF5F1"
     C_OK_FG = "1A6B4A"
     C_WARN_BG = "FDF1ED"
     C_WARN_FG = "B5451B"
     C_NEUTRAL = "F8F7F4"
-
-    pair_lookup = {p["admin_col"]: p["suv_col"] for p in result.get("col_pairs", [])}
 
     name_col = _pick_column(admin.columns, _NAME_HINTS)
     number_col = _pick_column(admin.columns, _NUMBER_HINTS)
@@ -1348,59 +1367,45 @@ def generate_discrepancy_report(
     discrepancies = result.get("discrepancies", [])
     ws_disc = wb.create_sheet("Discrepancies")
 
-    disc_col_headers = ["Source", "Key"] + admin.columns
+    disc_col_headers = [
+        "ID",
+        "Normalized ID",
+        "Mismatch Count",
+        "Changed Columns",
+        "Admin Excel Rows",
+        "Suvidha Excel Rows",
+    ]
     for ci, hdr in enumerate(disc_col_headers, start=1):
         c = ws_disc.cell(row=1, column=ci, value=excel_safe_text(hdr))
         _style_cell(c, fill_hex=C_HDR_BG, bold=True, color=C_HDR_FG)
 
-    dr = 2
-    for disc in discrepancies:
-        diff_set = set(disc.get("diffs", {}).keys())
-        admin_row = disc.get("admin_row", {})
-        suv_row = disc.get("suv_row", {})
-        key_val = excel_safe_text(disc.get("key", ""))
-
-        # Admin row
-        ws_disc.cell(row=dr, column=1, value="Admin")
-        _style_cell(
-            ws_disc.cell(row=dr, column=1), fill_hex=C_ADM_BG, bold=True, color=C_ADM_FG
-        )
-        ws_disc.cell(row=dr, column=2, value=key_val)
-        _style_cell(ws_disc.cell(row=dr, column=2), fill_hex=C_ADM_BG)
-        for ci, col in enumerate(admin.columns, start=3):
-            val = excel_safe_text(admin_row.get(col, ""))
-            c = ws_disc.cell(row=dr, column=ci, value=val)
-            if col in diff_set:
-                _style_cell(c, fill_hex=C_ADM_DIFF, bold=True, color=C_ADM_FG)
-            else:
-                _style_cell(c, fill_hex=C_ADM_BG)
-        dr += 1
-
-        # Suvidha row
-        ws_disc.cell(row=dr, column=1, value="Suvidha")
-        _style_cell(
-            ws_disc.cell(row=dr, column=1), fill_hex=C_SUV_BG, bold=True, color=C_SUV_FG
-        )
-        ws_disc.cell(row=dr, column=2, value=key_val)
-        _style_cell(ws_disc.cell(row=dr, column=2), fill_hex=C_SUV_BG)
-        for ci, col in enumerate(admin.columns, start=3):
-            diff_info = disc.get("diffs", {}).get(col)
-            if diff_info:
-                val = excel_safe_text(diff_info.get("suvidha", ""))
-                c = ws_disc.cell(row=dr, column=ci, value=val)
-                _style_cell(c, fill_hex=C_SUV_DIFF, bold=True, color=C_SUV_FG)
-            else:
-                suv_col = pair_lookup.get(col, col)
-                val = excel_safe_text(suv_row.get(suv_col, suv_row.get(col, "")))
-                c = ws_disc.cell(row=dr, column=ci, value=val)
-                _style_cell(c, fill_hex=C_SUV_BG)
-        dr += 1
-
-        # Separator row
-        for ci in range(1, len(disc_col_headers) + 1):
-            c = ws_disc.cell(row=dr, column=ci, value="")
-            c.fill = PatternFill("solid", start_color=C_SEP)
-        dr += 1
+    if discrepancies:
+        for ri, disc in enumerate(discrepancies, start=2):
+            ws_disc.cell(row=ri, column=1, value=excel_safe_text(disc.get("id", "")))
+            ws_disc.cell(
+                row=ri, column=2, value=excel_safe_text(disc.get("normalized_id", ""))
+            )
+            ws_disc.cell(row=ri, column=3, value=disc.get("mismatch_count", 0))
+            ws_disc.cell(
+                row=ri,
+                column=4,
+                value=excel_safe_text(", ".join(disc.get("changed_columns", []))),
+            )
+            ws_disc.cell(
+                row=ri,
+                column=5,
+                value=", ".join(str(x) for x in disc.get("admin_excel_rows", [])),
+            )
+            ws_disc.cell(
+                row=ri,
+                column=6,
+                value=", ".join(str(x) for x in disc.get("suvidha_excel_rows", [])),
+            )
+            for ci in range(1, len(disc_col_headers) + 1):
+                _style_cell(ws_disc.cell(row=ri, column=ci), fill_hex=C_NEUTRAL)
+    else:
+        ws_disc.cell(row=2, column=1, value="No discrepancies found.")
+        _style_cell(ws_disc.cell(row=2, column=1), fill_hex=C_OK_BG, color=C_OK_FG)
 
     # Auto-width for discrepancies sheet
     for col_cells in ws_disc.columns:
@@ -1410,6 +1415,66 @@ def generate_discrepancy_report(
         )
 
     # ── Sheet 3: Only in Admin ────────────────────────────────────────────────
+    ws_md = wb.create_sheet("Mismatch Details")
+    mismatch_details = result.get("mismatch_details", [])
+    detail_headers = [
+        "ID",
+        "Normalized ID",
+        "Column",
+        "Suvidha Column",
+        "Admin Value",
+        "Suvidha Value",
+        "Difference",
+        "Admin Excel Rows",
+        "Suvidha Excel Rows",
+    ]
+    for ci, hdr in enumerate(detail_headers, start=1):
+        c = ws_md.cell(row=1, column=ci, value=hdr)
+        _style_cell(c, fill_hex=C_HDR_BG, bold=True, color=C_HDR_FG)
+
+    if mismatch_details:
+        for ri, item in enumerate(mismatch_details, start=2):
+            ws_md.cell(row=ri, column=1, value=excel_safe_text(item.get("id", "")))
+            ws_md.cell(
+                row=ri, column=2, value=excel_safe_text(item.get("normalized_id", ""))
+            )
+            ws_md.cell(row=ri, column=3, value=excel_safe_text(item.get("column", "")))
+            ws_md.cell(
+                row=ri,
+                column=4,
+                value=excel_safe_text(item.get("suvidha_column", "")),
+            )
+            ws_md.cell(
+                row=ri, column=5, value=excel_safe_text(item.get("admin_value", ""))
+            )
+            ws_md.cell(
+                row=ri, column=6, value=excel_safe_text(item.get("suvidha_value", ""))
+            )
+            ws_md.cell(
+                row=ri, column=7, value=excel_safe_text(item.get("difference", ""))
+            )
+            ws_md.cell(
+                row=ri,
+                column=8,
+                value=", ".join(str(x) for x in item.get("admin_excel_rows", [])),
+            )
+            ws_md.cell(
+                row=ri,
+                column=9,
+                value=", ".join(str(x) for x in item.get("suvidha_excel_rows", [])),
+            )
+            for ci in range(1, len(detail_headers) + 1):
+                _style_cell(ws_md.cell(row=ri, column=ci), fill_hex=C_NEUTRAL)
+    else:
+        ws_md.cell(row=2, column=1, value="No mismatches found.")
+        _style_cell(ws_md.cell(row=2, column=1), fill_hex=C_OK_BG, color=C_OK_FG)
+
+    for col_cells in ws_md.columns:
+        length = max((len(str(c.value or "")) for c in col_cells), default=8)
+        ws_md.column_dimensions[get_column_letter(col_cells[0].column)].width = min(
+            length + 4, 42
+        )
+
     only_admin_rows = result.get("only_admin_rows", [])
     ws_oa = wb.create_sheet("Only in Admin")
     if only_admin_rows:

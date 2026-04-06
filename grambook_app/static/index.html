@@ -1298,8 +1298,11 @@ document.getElementById('dlBtn').addEventListener('click', () => {
       const a = document.createElement('a');
       const ts = new Date().toISOString().slice(0, 10);
       a.href = url; a.download = `grambook_reconciliation_${ts}.xlsx`;
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke asynchronously so browsers have time to start the download.
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
       dl.disabled = false;
       dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
     })
@@ -1349,33 +1352,34 @@ function renderTab(r, tab) {
 }
 
 function renderDisc(r) {
-  if (!r.discrepancies.length)
+  const details = Array.isArray(r.mismatch_details) ? r.mismatch_details : [];
+  if (!details.length)
     return `<div class="empty"><div class="ico">✅</div><strong>All clear</strong>All matched records are identical.</div>`;
 
-  const displayCols = [r.admin_key, ...r.admin_cols.filter(c => c !== r.admin_key)];
   let h = `<div class="tbl-outer"><table><thead><tr>
-    <th>Source</th>${displayCols.map(c => `<th>${esc(c)}</th>`).join('')}
+    <th>ID</th>
+    <th>Column</th>
+    <th>Suvidha Column</th>
+    <th>Admin Value</th>
+    <th>Suvidha Value</th>
+    <th>Difference</th>
+    <th>Admin Rows</th>
+    <th>Suvidha Rows</th>
   </tr></thead><tbody>`;
 
-  r.discrepancies.forEach(entry => {
-    const diffSet = new Set(Object.keys(entry.diffs));
-
-    h += `<tr class="a-row"><td><span class="badge-src a">Admin</span></td>`;
-    displayCols.forEach(c => {
-      h += `<td class="${diffSet.has(c) ? 'diff' : ''}">${esc(String(entry.admin_row[c] ?? ''))}</td>`;
-    });
-    h += `</tr>`;
-
-    h += `<tr class="s-row"><td><span class="badge-src s">Suvidha</span></td>`;
-    displayCols.forEach(c => {
-      const v = diffSet.has(c)
-        ? esc(entry.diffs[c].suvidha)
-        : esc(String(entry.suv_row[entry.diffs[c]?.suv_col ?? c] ?? entry.suv_row[c] ?? ''));
-      h += `<td class="${diffSet.has(c) ? 'diff' : ''}">${v}</td>`;
-    });
-    h += `</tr>`;
-
-    h += `<tr class="sep"><td colspan="${displayCols.length + 1}"></td></tr>`;
+  details.forEach(item => {
+    const adminRows = Array.isArray(item.admin_excel_rows) ? item.admin_excel_rows.join(', ') : '';
+    const suvidhaRows = Array.isArray(item.suvidha_excel_rows) ? item.suvidha_excel_rows.join(', ') : '';
+    h += `<tr class="a-row">
+      <td>${esc(String(item.id ?? ''))}</td>
+      <td class="diff">${esc(String(item.column ?? ''))}</td>
+      <td>${esc(String(item.suvidha_column ?? ''))}</td>
+      <td class="diff">${esc(String(item.admin_value ?? ''))}</td>
+      <td class="diff">${esc(String(item.suvidha_value ?? ''))}</td>
+      <td>${esc(String(item.difference ?? ''))}</td>
+      <td>${esc(adminRows)}</td>
+      <td>${esc(suvidhaRows)}</td>
+    </tr>`;
   });
 
   return h + '</tbody></table></div>';
