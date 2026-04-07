@@ -1182,7 +1182,7 @@ document.getElementById('submitBtn').addEventListener('click', () => {
   fd.append('suv_header_row',    p.suv_header_row);
   fd.append('suv_header_span',   p.suv_header_span);
 
-  fetch('/api/reconcile', { method: 'POST', body: fd })
+  fetch('/reconcile', { method: 'POST', body: fd })
     .then(r => r.json())
     .then(data => {
       setBusy(false);
