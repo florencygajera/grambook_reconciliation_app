@@ -1352,39 +1352,42 @@ function renderTab(r, tab) {
 }
 
 function renderDisc(r) {
-  const details = Array.isArray(r.mismatch_details) ? r.mismatch_details : [];
-  if (!details.length)
+  const details = Array.isArray(r.discrepancies) ? r.discrepancies : [];
+  if (!details || !details.length)
     return `<div class="empty"><div class="ico">✅</div><strong>All clear</strong>All matched records are identical.</div>`;
 
+  const columns = Array.isArray(r.admin_cols) ? r.admin_cols : [];
   let h = `<div class="tbl-outer"><table><thead><tr>
-    <th>ID</th>
-    <th>Column</th>
-    <th>Suvidha Column</th>
-    <th>Admin Value</th>
-    <th>Suvidha Value</th>
-    <th>Difference</th>
-    <th>Admin Rows</th>
-    <th>Suvidha Rows</th>
+    <th>Source</th>
+    ${columns.map(col => `<th>${esc(String(col))}</th>`).join('')}
   </tr></thead><tbody>`;
 
   details.forEach(item => {
-    const adminRows = Array.isArray(item.admin_excel_rows) ? item.admin_excel_rows.join(', ') : '';
-    const suvidhaRows = Array.isArray(item.suvidha_excel_rows) ? item.suvidha_excel_rows.join(', ') : '';
+    const adminRow = item && item.admin_row ? item.admin_row : {};
+    const suvRow = item && item.suv_row ? item.suv_row : {};
+    const diffCols = Array.isArray(item && item.diff_cols) ? item.diff_cols : [];
+
     h += `<tr class="a-row">
-      <td>${esc(String(item.id ?? ''))}</td>
-      <td class="diff">${esc(String(item.column ?? ''))}</td>
-      <td>${esc(String(item.suvidha_column ?? ''))}</td>
-      <td class="diff">${esc(String(item.admin_value ?? ''))}</td>
-      <td class="diff">${esc(String(item.suvidha_value ?? ''))}</td>
-      <td>${esc(String(item.difference ?? ''))}</td>
-      <td>${esc(adminRows)}</td>
-      <td>${esc(suvidhaRows)}</td>
+      <td>Admin</td>
+      ${columns.map(col => {
+        const cls = diffCols.includes(col) ? ' class="diff"' : '';
+        return `<td${cls}>${esc(String(adminRow[col] ?? ''))}</td>`;
+      }).join('')}
+    </tr>
+    <tr class="s-row">
+      <td>Suvidha</td>
+      ${columns.map(col => {
+        const cls = diffCols.includes(col) ? ' class="diff"' : '';
+        return `<td${cls}>${esc(String(suvRow[col] ?? ''))}</td>`;
+      }).join('')}
+    </tr>
+    <tr class="sep">
+      <td colspan="${columns.length + 1}"></td>
     </tr>`;
   });
 
   return h + '</tbody></table></div>';
 }
-
 function renderOnly(rows, cols, rowCls) {
   if (!rows || !rows.length)
     return `<div class="empty"><div class="ico">✅</div><strong>All clear</strong>No exclusive records found.</div>`;
@@ -1420,3 +1423,4 @@ function clearErr() {
 </script>
 </body>
 </html>
+
