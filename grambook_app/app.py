@@ -778,6 +778,11 @@ def reconcile(
     suv_key: str,
     manual_mappings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    matching_records = 0  # noqa: F821
+    discrepancies: list[dict[str, Any]] = []  # noqa: F821
+    only_admin_rows: list[dict[str, str]] = []  # noqa: F821
+    only_suv_rows: list[dict[str, str]] = []  # noqa: F821
+    col_mismatch_counter: dict[str, int] = defaultdict(int)  # noqa: F821
 
     # PATCH-2: Improved key type detection (first 10 non-empty rows)
     def _is_numeric_key(key_col: str, rows: list[dict[str, str]]) -> bool:
