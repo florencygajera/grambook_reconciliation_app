@@ -1352,11 +1352,11 @@ function renderTab(r, tab) {
 }
 
 function renderDisc(r) {
-  const details = Array.isArray(r.discrepancies) ? r.discrepancies : [];
+  const details = r.discrepancies || [];
   if (!details || !details.length)
     return `<div class="empty"><div class="ico">✅</div><strong>All clear</strong>All matched records are identical.</div>`;
 
-  const columns = Array.isArray(r.admin_cols) ? r.admin_cols : [];
+  const columns = r.admin_cols || [];
   let h = `<div class="tbl-outer"><table><thead><tr>
     <th>Source</th>
     ${columns.map(col => `<th>${esc(String(col))}</th>`).join('')}
@@ -1423,4 +1423,5 @@ function clearErr() {
 </script>
 </body>
 </html>
+
 

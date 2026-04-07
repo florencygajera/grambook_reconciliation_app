@@ -1185,7 +1185,29 @@ def reconcile(
         {"admin_col": a_col, "suv_col": s_col, "confidence": 1.0}
         for a_col, s_col in column_mapping.items()
     ]
-    _debug_log("column_mapping_pairs", [f"{a} -> {s}" for a, s in column_mapping.items()])
+    pair_lookup = {
+        p.get("admin_col"): p.get("suv_col")
+        for p in col_pairs
+        if isinstance(p, dict) and p.get("admin_col") and p.get("suv_col")
+    }
+    _debug_log("column_mapping_pairs", [f"{a} -> {s}" for a, s in pair_lookup.items()])
+
+    def align_rows(
+        admin_row: dict[str, Any],
+        suv_row: dict[str, Any],
+        admin_columns: list[str],
+        lookup: dict[str, str],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        aligned_admin: dict[str, Any] = {}
+        aligned_suv: dict[str, Any] = {}
+        for col in admin_columns:
+            aligned_admin[col] = admin_row.get(col, "")
+            suv_col = lookup.get(col)
+            if suv_col and suv_col in suv_row:
+                aligned_suv[col] = suv_row.get(suv_col, "")
+            else:
+                aligned_suv[col] = ""
+        return aligned_admin, aligned_suv
 
     discrepancies: list[dict[str, Any]] = []
     matching_records = 0
@@ -1224,14 +1246,12 @@ def reconcile(
                     ),
                 }
 
-        aligned_admin = {col: a_row.get(col, "") for col in all_columns}
-        aligned_suv = {}
-        for col in all_columns:
-            mapped_col = column_mapping.get(col)
-            if mapped_col and mapped_col in s_row:
-                aligned_suv[col] = s_row.get(mapped_col, "")
-            else:
-                aligned_suv[col] = ""
+        aligned_admin, aligned_suv = align_rows(
+            a_row,
+            s_row,
+            all_columns,
+            pair_lookup,
+        )
 
         if diff_cols:
             for dc in diff_cols:
