@@ -5,7 +5,7 @@ Run: python app.py  →  http://localhost:5000
 ═══════════════════════════════════════════════════════════════
 PATCH CHANGELOG v3 (zero-loss row routing fix)
 ═══════════════════════════════════════════════════════════════
-PATCH-1  FUZZY_COLUMN_MATCH_THRESHOLD lowered 0.92 → 0.70
+PATCH-1  FUZZY_COLUMN_MATCH_THRESHOLD lowered 0.92 → 0.75
 
 PATCH-2  map_columns_smart returns (pairs, unmapped_admin, unmapped_suv)
          + optional manual_mappings dict for hard overrides.
@@ -297,53 +297,84 @@ def canonical_numeric_text(value: Any) -> str | None:
     return format(d.normalize(), "f")
 
 
+# PATCH START — strict_values_equal: handle "" vs "0", 1 vs 1.0, COLUMN_NOT_FOUND
 def strict_values_equal(left: Any, right: Any) -> bool:
-    """
-    Strict equality:
-      • "" == ""     → True
-      • "" vs  0     → False
-      • 100 vs 100.0 → True  (Decimal normalisation)
-      • "abc" vs "ABC" → False (case-sensitive)
-    """
     left_str = canonical_text(left)
     right_str = canonical_text(right)
 
-    if left_str == "" and right_str == "":
-        return True
-    if left_str == "" or right_str == "":
+    # COLUMN_NOT_FOUND is never equal to anything
+    if left_str == COLUMN_NOT_FOUND or right_str == COLUMN_NOT_FOUND:
         return False
 
+    # Both empty → equal
+    if left_str == "" and right_str == "":
+        return True
+
+    # PATCH: treat empty string as equivalent to "0" for financial data
+    # (blank cell and numeric 0 are considered equal)
+    def _effective(s: str) -> str:
+        if s == "":
+            return "0"
+        return s
+
+    left_str = _effective(left_str)
+    right_str = _effective(right_str)
+
+    # Numeric comparison — handles 1 == 1.0, "001" == "1", etc.
     left_num = _parse_decimal(left_str.replace(",", ""))
     right_num = _parse_decimal(right_str.replace(",", ""))
 
     if left_num is not None and right_num is not None:
         return left_num == right_num
+
+    # Mixed (one numeric, one not) → not equal
     if (left_num is None) != (right_num is None):
         return False
 
+    # Plain string comparison (already NFKC-normalised via canonical_text)
     return left_str == right_str
+
+
+# PATCH END
 
 
 def normalize_column_key(name: str) -> str:
     return re.sub(r"[\s_\-]+", "", canonical_text(name).lower())
 
 
+# PATCH START — normalize_key_value: deterministic, handles "001"=="1", Gujarati digits
 def normalize_key_value(value: Any) -> str:
-    text = "" if value is None else str(value)
+    if value is None:
+        return ""
+
+    text = str(value)
+    # Step 1: Unicode + Gujarati digit normalisation
     text = unicodedata.normalize("NFKC", text)
     text = text.translate(INDIC_DIGIT_MAP)
     text = ZERO_WIDTH_RE.sub("", text)
-    text = re.sub(r"\s+", "", text).strip().lower()
+    text = re.sub(r"\s+", " ", text).strip()
+
     if not text:
         return ""
 
-    # Canonicalize numeric-looking keys so "4.0" and "4" map to same key.
-    d = _parse_decimal(text)
-    if d is not None:
-        if d == 0:
-            return "0"
-        return format(d.normalize(), "f")
-    return text
+    # Step 2: Numeric normalisation — strips leading zeros, removes trailing .0
+    # "001" → "1", "1.0" → "1", "1,234.50" → "1234.5"
+    try:
+        num = Decimal(text.replace(",", ""))
+        if not num.is_finite():
+            return text.lower()
+        # PATCH: integer-valued decimals collapse to int string
+        if num == num.to_integral_value():
+            return str(int(num.to_integral_value()))
+        return format(num.normalize(), "f")
+    except Exception:
+        pass
+
+    # Step 3: Non-numeric fallback — lowercase for consistent matching
+    return text.lower()
+
+
+# PATCH END
 
 
 def is_numeric_like(text: str) -> bool:
@@ -655,6 +686,32 @@ def _build_column_meta(
     return out
 
 
+# PATCH START — detect_category: guard empty/numeric columns
+def detect_category(col: str) -> str:
+    col = str(col).strip()
+    if not col:
+        return "empty"  # PATCH: distinguish from "other"
+
+    if "ઘર" in col:
+        return "ghar"
+    if "સફાઈ" in col:
+        return "safai"
+    if "સફઈ" in col:
+        return "safai"  # PATCH: alternate spelling
+    if "લાઇટ" in col:
+        return "light"
+    if "લાઈટ" in col:
+        return "light"  # PATCH: before normalization
+    if "સા.પાણી" in col or "સાપાણી" in col:
+        return "sa_pani"
+    if "ખા.પાણી" in col or "ખાપાણી" in col:
+        return "kha_pani"
+    if "ગટર" in col:
+        return "gatar"
+
+    return "other"
+
+
 def build_headers(
     matrix: list[list[str]],
     header_start: int,
@@ -695,29 +752,54 @@ def build_headers(
             score = non_empty - sum(1 for h in combined if len(h) > 90) * 1.5
 
             multi_header_bonus = 0
+            # Replace the existing multi_header_bonus block in build_headers:
+            HEADER_KEYWORDS_ROW1 = [
+                "baki",
+                "test",
+                "type",
+                "category",
+                "status",
+                "remark",
+                "sr no",
+                "serial",
+                "બાકી",
+                "ચાલુ",
+                "કુલ",
+                "જૂની",
+                "નવી",
+                "વર્ષ",
+                "વિગત",
+                "પ્રકાર",
+                "સ્થિતિ",
+                "નોંધ",
+                "કરવેરો",
+                "વેરો",
+                "મિલ્કત",
+                "સરવેળો",
+            ]
+            HEADER_KEYWORDS_ROW2 = [
+                "no",
+                "number",
+                "id",
+                "code",
+                "name",
+                "ક્રમ",
+                "નંબર",
+                "કોડ",
+                "નામ",
+                "વિભાગ",
+                "gsn",
+                "survey",
+                "property",
+                "ward",
+                "owner",
+            ]
+
             for row_idx in range(span):
                 row_text = " ".join(local_rows[row_idx]).lower()
-                if any(
-                    k in row_text
-                    for k in [
-                        "baki",
-                        "test",
-                        "type",
-                        "category",
-                        "status",
-                        "remark",
-                        "sr no",
-                        "serial",
-                        "બાકી",
-                        "ચાલુ",
-                        "કુલ",
-                    ]
-                ):
+                if any(k in row_text for k in HEADER_KEYWORDS_ROW1):
                     multi_header_bonus += 2
-                if any(
-                    k in row_text
-                    for k in ["no", "number", "id", "code", "name", "ક્રમ", "નંબર"]
-                ):
+                if any(k in row_text for k in HEADER_KEYWORDS_ROW2):
                     multi_header_bonus += 1
             score += multi_header_bonus
 
@@ -899,30 +981,45 @@ def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def get_category(col: str) -> str:
-    col = canonical_text(col).lower()
-    if "\u0a98\u0ab0\u0ab5\u0ac7\u0ab0\u0acb" in col:  # ઘરવેરો
-        return "gharvero"
-    if "\u0ab8\u0abe\u0aaa\u0abe\u0aa3\u0ac0\u0aaf\u0acb" in col:  # સાપાણીયો
-        return "sapaniyo"
-    return "other"
-
-
-def _categories_compatible(admin_col: str, suv_col: str) -> bool:
-    return get_category(admin_col) == get_category(suv_col)
-
-
 # ── PATCH-1: Lowered from 0.92 → 0.75 ────────────────────────────────────────
 FUZZY_COLUMN_MATCH_THRESHOLD = 0.75
 
-MANUAL_MAP: dict[str, str] = {
-    "ઘરવેરો બાકી": "ઘરવેરો GS",
-    "ઘરવેરો ચાલુ": "ઘરવેરો GS_2",
-    "ઘરવેરો કુલ": "ઘરવેરો GS_3",
-    "સાપાણીયો બાકી": "સાપાણીયો GS",
-    "સાપાણીયો ચાલુ": "સાપાણીયો GS_2",
-    "સાપાણીયો કુલ": "સાપાણીયો GS_3",
-}
+# PATCH-GUJ: Gujarati term normalization for consistent fuzzy matching
+# PATCH START — normalize_gujarati_terms: canonical Gujarati column spelling
+_GUJARATI_NORM_MAP: list[tuple[str, str]] = [
+    # Light
+    ("લાઈટ", "લાઇટ"),
+    # Water
+    ("સાપાણી", "સા.પાણી"),
+    ("સા.પાણી", "સા.પાણી"),
+    ("ખાપાણી", "ખા.પાણી"),
+    ("ખા.પાણી", "ખા.પાણી"),
+    # Sewage
+    ("ગટર", "ગટર"),
+    # Cleaning
+    ("સફઈ", "સફાઈ"),
+    # Tax suffix normalisation
+    ("વેરા", "વેરો"),
+    ("ટેક્ષ", "ટેક્સ"),
+]
+
+
+def normalize_gujarati_terms(text: str) -> str:
+    """
+    PATCH-GUJ: Normalise known Gujarati script variations so that
+    e.g. 'લાઈટ' and 'લાઇટ' score as identical before fuzzy matching.
+    """
+    for variant, canonical in _GUJARATI_NORM_MAP:
+        text = text.replace(variant, canonical)
+    return text
+
+
+# PATCH END
+
+
+# PATCH START — map_columns_smart v2: category-gated, Gujarati-normalised, GS-fallback
+FUZZY_COLUMN_MATCH_THRESHOLD = 0.75  # used for exact-norm pass
+FUZZY_CAT_THRESHOLD = 0.65  # used for category-gated fuzzy pass
 
 
 def map_columns_smart(
@@ -932,158 +1029,202 @@ def map_columns_smart(
     suv_key: str,
     manual_mappings: dict[str, str] | None = None,
 ) -> tuple[
-    list[tuple[str, str, float]],  # mapped pairs (admin_col, suv_col, confidence)
-    list[str],  # unmapped admin cols
-    list[str],  # unmapped suv cols
+    list[tuple[str, str, float]],
+    list[str],
+    list[str],
 ]:
     """
-    PATCH-2: Returns three values now:
-      • mapped_pairs  — list of (admin_col, suv_col, confidence)
-      • unmapped_admin — admin cols with no suvidha counterpart
-      • unmapped_suv   — suvidha cols with no admin counterpart
+    Returns: (mapped_pairs, unmapped_admin, unmapped_suv)
 
-    manual_mappings: dict {admin_col_name: suv_col_name} for hard overrides.
-    Threshold lowered to 0.70 to catch transliterated Gujarati/English headers.
+    Pass 0 — manual overrides (unconditional)
+    Pass 1 — exact normalised key (category-gated)
+    Pass 2 — Gujarati-normalised fuzzy (category-gated, threshold 0.65)
+    Pass 3 — GS-suffix fallback → same-category 'કુલ'/'total' column
     """
+
     admin_candidates = [c for c in admin_cols if c != admin_key]
     suv_candidates = [c for c in suv_cols if c != suv_key]
 
-    suv_norm = {normalize_column_key(c): c for c in suv_candidates}
-    admin_norm = {normalize_column_key(c): c for c in admin_candidates}
+    # Pre-compute normalised keys for suvidha candidates
+    suv_norm_map: dict[str, str] = {}  # normalised_key → original col name
+    for sc in suv_candidates:
+        nk = normalize_column_key(normalize_gujarati_terms(sc))
+        if nk not in suv_norm_map:  # first-come-first-served on collision
+            suv_norm_map[nk] = sc
+
     used_suv: set[str] = set()
     mapped: list[tuple[str, str, float]] = []
+    rejected: list[dict] = []  # PATCH-DBG: rejected pairings
 
-    # Canonical aliases to improve Gujarati <-> English fallback matching.
-    aliases = {
-        "gsn": {"gsn", "નંબર", "number", "no", "ક્રમ"},
-        "number": {"number", "no", "નંબર", "ક્રમ", "gsn"},
-        "baki": {"baki", "બાકી"},
-        "chalu": {"chalu", "ચાલુ"},
-        "kul": {"kul", "કુલ", "total"},
-        "gharvero": {"gharvero", "ઘરવેરો"},
-        "sapaniyo": {"sapaniyo", "સાપાણીયો"},
-    }
+    def _already_mapped(ac: str) -> bool:
+        return any(x[0] == ac for x in mapped)
 
-    def _expand_alias_tokens(col_name: str) -> set[str]:
-        text = canonical_text(col_name).lower()
-        text = re.sub(r"[^\w\u0A80-\u0AFF]+", " ", text)
-        toks = {t for t in text.split() if t}
-        expanded = set(toks)
-        for t in list(toks):
-            if t in aliases:
-                expanded.update(aliases[t])
-            for root, group in aliases.items():
-                if t in group:
-                    expanded.update(group)
-                    expanded.add(root)
-        return expanded
-
-    def _alias_score(a_col: str, s_col: str) -> float:
-        a_toks = _expand_alias_tokens(a_col)
-        s_toks = _expand_alias_tokens(s_col)
-        if not a_toks or not s_toks:
-            return 0.0
-        inter = len(a_toks & s_toks)
-        union = len(a_toks | s_toks)
-        return inter / union if union else 0.0
-
-    # Pass 0: manual overrides
+    # ── Pass 0: manual overrides ──────────────────────────────────────────────
     if manual_mappings:
-        applied_manual: list[dict[str, str]] = []
-        for ac_raw, sc_raw in manual_mappings.items():
-            ac = admin_norm.get(normalize_column_key(ac_raw))
-            sc = suv_norm.get(normalize_column_key(sc_raw))
-            # Manual mapping MUST override fuzzy/category constraints.
-            if ac and sc and sc not in used_suv:
+        for ac, sc in manual_mappings.items():
+            if ac in admin_candidates and sc in suv_candidates and sc not in used_suv:
                 mapped.append((ac, sc, 1.0))
                 used_suv.add(sc)
-                applied_manual.append({"admin_col": ac, "suvidha_col": sc})
-        _debug_log("manual_mapping_applied", applied_manual)
 
-    # Pass 1: exact normalised key match
+    # ── Pass 1: exact normalised key match (category-gated) ──────────────────
     for ac in admin_candidates:
-        if any(x[0] == ac for x in mapped):
+        if _already_mapped(ac):
             continue
-        sc = suv_norm.get(normalize_column_key(ac))
-        if sc and sc not in used_suv:
-            mapped.append((ac, sc, 1.0))
-            used_suv.add(sc)
 
-    # Pass 2: alias-aware normalized fallback before fuzzy.
-    for ac in admin_candidates:
-        if any(x[0] == ac for x in mapped):
+        nk = normalize_column_key(normalize_gujarati_terms(ac))
+        sc = suv_norm_map.get(nk)
+
+        if not sc or sc in used_suv:
             continue
-        best_sc, best_alias = None, 0.0
+
+        ac_cat = detect_category(ac)
+        sc_cat = detect_category(sc)
+
+        # Hard block: different named categories — never cross-map
+        if ac_cat != sc_cat and not (ac_cat == "other" and sc_cat == "other"):
+            rejected.append(
+                {
+                    "admin": ac,
+                    "suvidha": sc,
+                    "reason": "exact-key: category mismatch",
+                    "admin_cat": ac_cat,
+                    "suvidha_cat": sc_cat,
+                }
+            )
+            continue
+
+        mapped.append((ac, sc, 1.0))
+        used_suv.add(sc)
+
+    # ── Pass 2: Gujarati-normalised fuzzy match (category-gated) ─────────────
+    for ac in admin_candidates:
+        if _already_mapped(ac):
+            continue
+
+        ac_cat = detect_category(ac)
+        na = normalize_column_key(normalize_gujarati_terms(ac))
+
+        best_sc: str | None = None
+        best_score = 0.0
+
         for sc in suv_candidates:
             if sc in used_suv:
                 continue
-            alias_score = _alias_score(ac, sc)
-            if alias_score > best_alias:
-                best_alias = alias_score
-                best_sc = sc
-        if best_sc and best_alias >= 0.34:
-            mapped.append((ac, best_sc, round(best_alias, 4)))
-            used_suv.add(best_sc)
 
-    # Pass 3: fuzzy match at relaxed threshold (PATCH-1)
-    for ac in admin_candidates:
-        if any(x[0] == ac for x in mapped):
-            continue
-        best_sc, best_score = None, 0.0
-        na = normalize_column_key(ac)
-        for sc in suv_candidates:
-            if sc in used_suv:
-                continue
-            # Keep category guard for tax-family columns, but do not block "other".
-            ca = get_category(ac)
-            cs = get_category(sc)
-            if ca != "other" and cs != "other" and ca != cs:
-                continue
-            score = _similarity(na, normalize_column_key(sc))
+            sc_cat = detect_category(sc)
+
+            # HARD category filter
+            if ac_cat != sc_cat:
+                if not (ac_cat == "other" and sc_cat == "other"):
+                    rejected.append(
+                        {
+                            "admin": ac,
+                            "suvidha": sc,
+                            "reason": "fuzzy: category mismatch",
+                            "admin_cat": ac_cat,
+                            "suvidha_cat": sc_cat,
+                        }
+                    )
+                    continue
+
+            nb = normalize_column_key(normalize_gujarati_terms(sc))
+            score = _similarity(na, nb)
+
             if score > best_score:
                 best_score = score
                 best_sc = sc
-        if best_sc and best_score >= FUZZY_COLUMN_MATCH_THRESHOLD:
+
+        if best_sc and best_score >= FUZZY_CAT_THRESHOLD:
             mapped.append((ac, best_sc, round(best_score, 4)))
             used_suv.add(best_sc)
 
-    mapped_admin_set = {a for a, _, _ in mapped}
-    mapped_suv_set = used_suv
+    # ── Pass 3: GS-suffix fallback ────────────────────────────────────────────
+    # Admin cols with "GS" that are still unmapped → try a same-category
+    # suvidha col that contains "કુલ" or "total".
+    for ac in admin_candidates:
+        if _already_mapped(ac):
+            continue
+        if "GS" not in ac and "gs" not in ac.lower():
+            continue
 
-    unmapped_admin = [c for c in admin_candidates if c not in mapped_admin_set]
-    unmapped_suv = [c for c in suv_candidates if c not in mapped_suv_set]
+        ac_cat = detect_category(ac)
 
-    # PATCH-6: log unmapped columns
+        for sc in suv_candidates:
+            if sc in used_suv:
+                continue
+            sc_cat = detect_category(sc)
+            if ac_cat != sc_cat and not (ac_cat == "other" and sc_cat == "other"):
+                continue
+            if "કુલ" in sc or "total" in sc.lower():
+                mapped.append((ac, sc, 0.60))
+                used_suv.add(sc)
+                break
+
+    # ── Compute unmapped sets ─────────────────────────────────────────────────
+    mapped_admin = {a for a, _, _ in mapped}
+    unmapped_admin = [c for c in admin_candidates if c not in mapped_admin]
+    unmapped_suv = [c for c in suv_candidates if c not in used_suv]
+
+    # ── Debug output ──────────────────────────────────────────────────────────
     _debug_log("unmapped_admin_cols", unmapped_admin)
     _debug_log("unmapped_suv_cols", unmapped_suv)
+    _debug_log("rejected_mappings", rejected)
+    _debug_log(
+        "column_mapping_result",
+        [
+            {
+                "admin": a,
+                "suvidha": s,
+                "category": detect_category(a),
+                "confidence": c,
+            }
+            for a, s, c in mapped
+        ],
+    )
 
     return mapped, unmapped_admin, unmapped_suv
 
 
+# PATCH END
+
+
+# PATCH START — _build_key_index: cleaner logging for missing keys
 def _build_key_index(
     rows: list[dict[str, str]],
     key_col: str,
     row_position_map: dict[int, int],
-) -> tuple[dict[str, list[dict[str, Any]]], int, list[dict[str, Any]]]:
+) -> tuple[dict[str, list[dict[str, Any]]], int]:
     idx: dict[str, list[dict[str, Any]]] = defaultdict(list)
     missing = 0
-    missing_rows: list[dict[str, Any]] = []
+    missing_rows: list[int] = []  # PATCH: track which Excel rows had no key
+
     for i, row in enumerate(rows):
-        raw_key = row.get(key_col)
+        raw_key = row.get(key_col, "")
         key = normalize_key_value(raw_key)
-        excel_row = row_position_map.get(i, -1)
-        item = {
-            "df_row_index": i,
-            "excel_row": excel_row,
-            "row": row,
-            "display_key": canonical_text(raw_key),
-        }
         if not key:
             missing += 1
-            missing_rows.append(item)
+            missing_rows.append(row_position_map.get(i, i + 1))
             continue
-        idx[key].append(item)
-    return idx, missing, missing_rows
+        excel_row = row_position_map.get(i, -1)
+        idx[key].append(
+            {
+                "df_row_index": i,
+                "excel_row": excel_row,
+                "row": row,
+                "display_key": canonical_text(raw_key),
+            }
+        )
+
+    if missing_rows:
+        _debug_log(
+            f"missing_key_rows [{key_col}]",
+            {"count": missing, "excel_rows": missing_rows[:50]},
+        )
+
+    return idx, missing
+
+
+# PATCH END
 
 
 # ── PATCH-3: Full comparison including unmapped columns ───────────────────────
@@ -1099,8 +1240,11 @@ def _compare_row_pair(
     """
     Compare one admin row vs one suvidha row.
 
-    Compare mapped columns and include unmapped columns as COLUMN_NOT_FOUND
-    only when the source side has a non-empty value.
+    For mapped pairs: strict equality check.
+    For unmapped admin cols: if value non-empty → suvidha = COLUMN_NOT_FOUND.
+    For unmapped suvidha cols: if value non-empty → admin  = COLUMN_NOT_FOUND.
+
+    Returns {col_name: diff_info} for every mismatch found.
     """
     diffs: dict[str, Any] = {}
 
@@ -1108,40 +1252,30 @@ def _compare_row_pair(
         return admin_column_position_map.get(
             col,
             {
-                "df_index": admin_columns.index(col) if col in admin_columns else -1,
+                "df_index": admin_columns.index(col) if col in admin_columns else 0,
                 "excel_col": admin_columns.index(col) + 1
                 if col in admin_columns
-                else -1,
+                else 1,
             },
         )
 
-    s_norm_lookup = {normalize_column_key(k): k for k in s.keys()}
-
-    def _resolve_suv_col(mapped_col: str) -> str | None:
-        if mapped_col in s:
-            return mapped_col
-        return s_norm_lookup.get(normalize_column_key(mapped_col))
-
+    # Mapped column pairs
     for ac, sc, confidence in col_pairs:
-        if ac not in a:
-            continue
-        resolved_sc = _resolve_suv_col(sc)
-        if not resolved_sc:
-            continue
         av = canonical_text(a.get(ac, ""))
-        sv = canonical_text(s.get(resolved_sc, ""))
+        sv = canonical_text(s.get(sc, ""))
         if not strict_values_equal(av, sv):
             diffs[ac] = {
                 "admin": av,
                 "suvidha": sv,
-                "suv_col": resolved_sc,
+                "suv_col": sc,
                 "confidence": round(confidence, 4),
                 **_position(ac),
             }
 
+    # PATCH-3a: Admin columns that have NO suvidha counterpart
     for ac in unmapped_admin:
         av = canonical_text(a.get(ac, ""))
-        if av:
+        if av:  # non-empty admin value with no suvidha column → mismatch
             diffs[ac] = {
                 "admin": av,
                 "suvidha": COLUMN_NOT_FOUND,
@@ -1150,14 +1284,15 @@ def _compare_row_pair(
                 **_position(ac),
             }
 
+    # PATCH-3b: Suvidha columns that have NO admin counterpart
     for sc in unmapped_suv:
         sv = canonical_text(s.get(sc, ""))
-        if sv:
-            diffs[f"[SUV] {sc}"] = {
+        if sv:  # non-empty suvidha value with no admin column → mismatch
+            label = f"[SUV] {sc}"  # prefix to distinguish in output
+            diffs[label] = {
                 "admin": COLUMN_NOT_FOUND,
                 "suvidha": sv,
                 "suv_col": sc,
-                "admin_col": None,
                 "confidence": 0.0,
                 "df_index": -1,
                 "excel_col": -1,
@@ -1175,159 +1310,60 @@ def reconcile(
     manual_mappings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
 
-    admin_idx, admin_missing_keys, admin_missing_rows = _build_key_index(
+    admin_idx, admin_missing_keys = _build_key_index(
         admin.rows, admin_key, admin.row_position_map
     )
-    suv_idx, suv_missing_keys, suv_missing_rows = _build_key_index(
+    suv_idx, suv_missing_keys = _build_key_index(
         suv.rows, suv_key, suv.row_position_map
     )
 
+    # PATCH-2: unpack three-tuple
     col_pairs, unmapped_admin, unmapped_suv = map_columns_smart(
         admin.columns, suv.columns, admin_key, suv_key, manual_mappings
     )
+
     pair_lookup = {a: s for a, s, _ in col_pairs}
-
-    # Always align key columns in output rows.
-    pair_lookup[admin_key] = suv_key
-
-    # Deterministic fallback mapping for missed columns:
-    # exact normalized-name match, then safe fuzzy match.
-    used_suv_cols = set(pair_lookup.values())
-    suv_candidate_cols = [c for c in suv.columns if c != suv_key]
-    for admin_col in admin.columns:
-        if admin_col == admin_key or admin_col in pair_lookup:
-            continue
-        admin_norm = normalize_column_key(admin_col)
-        exact_match = None
-        for suv_col in suv_candidate_cols:
-            if suv_col in used_suv_cols:
-                continue
-            if normalize_column_key(suv_col) == admin_norm:
-                exact_match = suv_col
-                break
-        if exact_match:
-            pair_lookup[admin_col] = exact_match
-            used_suv_cols.add(exact_match)
-
-    for admin_col in admin.columns:
-        if admin_col == admin_key or admin_col in pair_lookup:
-            continue
-        best_col = None
-        best_score = 0.0
-        admin_norm = normalize_column_key(admin_col)
-        for suv_col in suv_candidate_cols:
-            if suv_col in used_suv_cols:
-                continue
-            score = _similarity(admin_norm, normalize_column_key(suv_col))
-            if score > best_score:
-                best_score = score
-                best_col = suv_col
-        if best_col and best_score >= FUZZY_COLUMN_MATCH_THRESHOLD:
-            pair_lookup[admin_col] = best_col
-            used_suv_cols.add(best_col)
-
-    unmapped_admin = [
-        c for c in admin.columns if c not in pair_lookup and c != admin_key
-    ]
-    unmapped_suv = [
-        c for c in suv.columns if c not in used_suv_cols and c != suv_key
-    ]
-    if not pair_lookup:
-        # Safe fallback: direct same-name column mapping only.
-        for col in admin.columns:
-            if col == admin_key:
-                continue
-            if col in suv.columns and col != suv_key:
-                pair_lookup[col] = col
-        if pair_lookup:
-            col_pairs = [(a, s, 1.0) for a, s in pair_lookup.items()]
-            unmapped_admin = [c for c in admin.columns if c not in pair_lookup and c != admin_key]
-            unmapped_suv = [c for c in suv.columns if c not in set(pair_lookup.values()) and c != suv_key]
-
-    _debug_log("column_mapping", pair_lookup)
-    _debug_log("unmapped_admin_cols", unmapped_admin)
-    _debug_log("unmapped_suv_cols", unmapped_suv)
 
     admin_keys = set(admin_idx)
     suv_keys = set(suv_idx)
-    common_keys = admin_keys & suv_keys
+    common = admin_keys & suv_keys
     only_admin_keys = admin_keys - suv_keys
     only_suv_keys = suv_keys - admin_keys
 
+    _debug_log(
+        "column_mapping",
+        [{"admin": a, "suvidha": s, "confidence": c} for a, s, c in col_pairs],
+    )
     _debug_log(
         "key_stats",
         {
             "total_admin_keys": len(admin_keys),
             "total_suvidha_keys": len(suv_keys),
-            "common_keys": len(common_keys),
-            "only_admin_keys": len(only_admin_keys),
-            "only_suvidha_keys": len(only_suv_keys),
+            "common_keys": len(common),
+            "only_admin": len(only_admin_keys),
+            "only_suvidha": len(only_suv_keys),
             "admin_missing_key_rows": admin_missing_keys,
             "suvidha_missing_key_rows": suv_missing_keys,
         },
     )
 
-    def align_rows(
-        admin_row: dict[str, Any],
-        suv_row: dict[str, Any],
-        admin_columns: list[str],
-        lookup: dict[str, str],
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        aligned_admin: dict[str, Any] = {}
-        aligned_suv: dict[str, Any] = {}
-
-        row_norm_lookup: dict[str, str] = {}
-        for suv_col_name in suv_row.keys():
-            nk = normalize_column_key(suv_col_name)
-            if nk and nk not in row_norm_lookup:
-                row_norm_lookup[nk] = suv_col_name
-
-        def _resolve_suv_value(admin_col_name: str) -> Any:
-            mapped = lookup.get(admin_col_name)
-            if mapped and mapped in suv_row:
-                return suv_row.get(mapped, "")
-            if admin_col_name in suv_row:
-                return suv_row.get(admin_col_name, "")
-
-            nk = normalize_column_key(admin_col_name)
-            direct = row_norm_lookup.get(nk)
-            if direct:
-                return suv_row.get(direct, "")
-
-            # Runtime fuzzy fallback prevents blank Suvidha cells in output.
-            best_col = None
-            best_score = 0.0
-            for suv_col_name in suv_row.keys():
-                score = _similarity(nk, normalize_column_key(suv_col_name))
-                if score > best_score:
-                    best_score = score
-                    best_col = suv_col_name
-            if best_col and best_score >= FUZZY_COLUMN_MATCH_THRESHOLD:
-                return suv_row.get(best_col, "")
-            return ""
-
-        for col in admin_columns:
-            aligned_admin[col] = admin_row.get(col, "")
-            aligned_suv[col] = _resolve_suv_value(col)
-        return aligned_admin, aligned_suv
-
     discrepancies: list[dict[str, Any]] = []
     matching_records = 0
-    duplicate_key_conflicts: list[dict[str, Any]] = []
+    duplicate_key_conflicts: list[dict] = []
+
+    # Surplus rows from duplicate-key groups — routed to only_* NOT discrepancies
+    # (v3 fix: v2 incorrectly sent these to discrepancies)
+    extra_only_admin: list[dict[str, str]] = []
+    extra_only_suv: list[dict[str, str]] = []
+
+    # Per-column mismatch frequency (PATCH-6)
     col_mismatch_counter: dict[str, int] = defaultdict(int)
 
-    only_admin_rows: list[dict[str, Any]] = [x["row"] for x in admin_missing_rows]
-    only_suv_rows: list[dict[str, Any]] = [x["row"] for x in suv_missing_rows]
-
-    for key in sorted(only_admin_keys):
-        only_admin_rows.extend(item["row"] for item in admin_idx[key])
-    for key in sorted(only_suv_keys):
-        only_suv_rows.extend(item["row"] for item in suv_idx[key])
-
-    for key in sorted(common_keys):
+    for key in sorted(common):
         a_rows = admin_idx[key]
         s_rows = suv_idx[key]
 
+        # Log duplicate key groups for auditability
         if len(a_rows) > 1 or len(s_rows) > 1:
             duplicate_key_conflicts.append(
                 {
@@ -1337,19 +1373,20 @@ def reconcile(
                 }
             )
 
-        unmatched_s: set[int] = set(range(len(s_rows)))
+        # ── Many-to-many matching via greedy best-fit ─────────────────────────
+        # matched_s_indices tracks which suvidha rows have been claimed so that
+        # each suvidha row can only pair with one admin row (1:1 per iteration).
+        matched_s_indices: set[int] = set()
 
         for a_item in a_rows:
-            if not unmatched_s:
-                only_admin_rows.append(a_item["row"])
-                continue
-
-            best_idx = -1
             best_diffs: dict[str, Any] | None = None
-            best_score: tuple[int, int, int] | None = None
+            best_s_item = None
+            best_s_idx = -1
 
-            for s_idx in sorted(unmatched_s):
-                s_item = s_rows[s_idx]
+            # Find the suvidha row with the FEWEST differences (best pairing)
+            for s_idx, s_item in enumerate(s_rows):
+                if s_idx in matched_s_indices:
+                    continue
                 diffs = _compare_row_pair(
                     a_item["row"],
                     s_item["row"],
@@ -1359,72 +1396,100 @@ def reconcile(
                     admin.column_position_map,
                     admin.columns,
                 )
-                score = (
-                    len(diffs),
-                    s_item.get("excel_row", 10**9)
-                    if s_item.get("excel_row", -1) >= 0
-                    else 10**9,
-                    s_idx,
-                )
-                if best_score is None or score < best_score:
-                    best_score = score
-                    best_idx = s_idx
+                if best_diffs is None or len(diffs) < len(best_diffs):
                     best_diffs = diffs
+                    best_s_item = s_item
+                    best_s_idx = s_idx
 
-            matched_s_item = s_rows[best_idx]
-            unmatched_s.remove(best_idx)
-            row_diffs = best_diffs or {}
+            if best_s_item is None:
+                # ── BUCKET: only_admin ────────────────────────────────────────
+                # No suvidha row remains to pair with this admin row.
+                # This happens when suvidha has fewer duplicates than admin for
+                # the same key (e.g. admin has 3 rows, suvidha has 2).
+                # v2 BUG: these went to discrepancies — FIXED in v3.
+                extra_only_admin.append(a_item["row"])
+                continue
 
-            diff_cols = [c for c in admin.columns if c in row_diffs]
-            diff_cols.extend([c for c in row_diffs.keys() if c not in diff_cols])
+            matched_s_indices.add(best_s_idx)
 
-            aligned_admin, aligned_suv = align_rows(
-                a_item["row"], matched_s_item["row"], admin.columns, pair_lookup
-            )
-
-            if diff_cols:
+            if best_diffs:
+                # ── BUCKET: discrepancies ────────────────────────────────────
+                # Rows were paired AND have at least one value difference.
+                diff_cols = list(best_diffs.keys())
                 for dc in diff_cols:
                     col_mismatch_counter[dc] += 1
+
                 discrepancies.append(
                     {
                         "key": a_item["display_key"] or key,
                         "normalized_key": key,
                         "row_index": a_item["df_row_index"],
                         "admin_excel_row": a_item["excel_row"],
-                        "suvidha_excel_row": matched_s_item["excel_row"],
-                        "admin_row": aligned_admin,
-                        "suv_row": aligned_suv,
-                        "diffs": row_diffs,
+                        "suvidha_excel_row": best_s_item["excel_row"],
+                        "admin_row": a_item["row"],  # FULL row
+                        "suv_row": best_s_item["row"],  # FULL row
+                        "diffs": best_diffs,
                         "diff_cols": diff_cols,
                     }
                 )
             else:
+                # ── BUCKET: matching_records ──────────────────────────────────
+                # Rows were paired AND are identical across all columns.
                 matching_records += 1
 
-        for s_idx in sorted(unmatched_s):
-            only_suv_rows.append(s_rows[s_idx]["row"])
+        # ── BUCKET: only_suv ─────────────────────────────────────────────────
+        # Suvidha rows that were not paired (suvidha has more duplicates than admin).
+        # v2 BUG: these went to discrepancies — FIXED in v3.
+        for s_idx, s_item in enumerate(s_rows):
+            if s_idx not in matched_s_indices:
+                extra_only_suv.append(s_item["row"])
+
+    # ── Assemble final only_* lists ───────────────────────────────────────────
+    # Keys entirely absent from the other file
+    only_admin_rows: list[dict[str, str]] = [
+        item["row"] for key in sorted(only_admin_keys) for item in admin_idx[key]
+    ]
+    only_suv_rows: list[dict[str, str]] = [
+        item["row"] for key in sorted(only_suv_keys) for item in suv_idx[key]
+    ]
+
+    # Surplus duplicate rows from matched-key groups
+    only_admin_rows.extend(extra_only_admin)
+    only_suv_rows.extend(extra_only_suv)
 
     disc_count = len(discrepancies)
+    validation_note = ""
+    if disc_count == 0 and len(common) > 0:
+        validation_note = (
+            "WARNING: 0 discrepancies found across all matched keys. "
+            "Verify column mapping and key selection are correct."
+        )
 
-    total_admin_rows = len(admin.rows)
-    total_suv_rows = len(suv.rows)
+    # ── PATCH-6: comprehensive debug audit ───────────────────────────────────
+    total_admin_rows = sum(len(v) for v in admin_idx.values())
+    total_suv_rows = sum(len(v) for v in suv_idx.values())
     audit_admin = matching_records + disc_count + len(only_admin_rows)
     audit_suv = matching_records + disc_count + len(only_suv_rows)
-
-    validation_note = ""
-    if audit_admin != total_admin_rows or audit_suv != total_suv_rows:
-        validation_note = "WARNING: Row accounting mismatch detected."
 
     _debug_log("col_mismatch_frequency", dict(col_mismatch_counter))
     _debug_log(
         "reconciliation_result",
         {
-            "total_admin_rows": total_admin_rows,
-            "total_suvidha_rows": total_suv_rows,
+            "total_admin_rows_indexed": total_admin_rows,
+            "total_suvidha_rows_indexed": total_suv_rows,
+            "admin_missing_key_rows": admin_missing_keys,
+            "suvidha_missing_key_rows": suv_missing_keys,
+            "common_keys": len(common),
+            "─── buckets ───": "─────────────────────",
             "matching_records": matching_records,
             "discrepancies": disc_count,
             "only_admin_rows": len(only_admin_rows),
+            "  └─ unique keys": len(only_admin_keys),
+            "  └─ surplus duplicates": len(extra_only_admin),
             "only_suv_rows": len(only_suv_rows),
+            "  └─ unique keys": len(only_suv_keys),
+            "  └─ surplus duplicates": len(extra_only_suv),
+            "─── audit ───": "─────────────────────",
             "admin_accounted_for": f"{audit_admin}/{total_admin_rows}",
             "suvidha_accounted_for": f"{audit_suv}/{total_suv_rows}",
             "zero_loss_admin": audit_admin == total_admin_rows,
@@ -1433,18 +1498,15 @@ def reconcile(
         },
     )
 
-    total_records = max(total_admin_rows, total_suv_rows)
-
-    output_col_pairs = [
-        {"admin_col": a, "suv_col": s, "confidence": 1.0}
-        for a, s in pair_lookup.items()
-    ]
-
     return {
         "discrepancies": discrepancies,
         "only_admin_rows": only_admin_rows,
         "only_suv_rows": only_suv_rows,
-        "col_pairs": output_col_pairs,
+        "column_map": {a: s for a, s, _ in col_pairs},  # ADD THIS
+        "col_pairs": [
+            {"admin_col": a, "suv_col": s, "confidence": round(c, 4)}
+            for a, s, c in col_pairs
+        ],
         "admin_key": admin_key,
         "suv_key": suv_key,
         "admin_cols": admin.columns,
@@ -1456,7 +1518,7 @@ def reconcile(
         },
         "col_mismatch_frequency": dict(col_mismatch_counter),
         "meta": {
-            "compared_keys": len(common_keys),
+            "compared_keys": len(common),
             "duplicate_key_conflicts": duplicate_key_conflicts,
             "admin_missing_keys": admin_missing_keys,
             "suvidha_missing_keys": suv_missing_keys,
@@ -1469,7 +1531,7 @@ def reconcile(
             },
         },
         "stats": {
-            "total": total_records,
+            "total": len(admin_keys | suv_keys),
             "matched": matching_records,
             "disc": disc_count,
             "only_a": len(only_admin_rows),
@@ -1478,6 +1540,8 @@ def reconcile(
         },
     }
 
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Excel output  (PATCH-5: ALL columns, no _should_show filtering)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1530,54 +1594,10 @@ def generate_discrepancy_report(admin: ParsedDataset, result: dict) -> io.BytesI
     suv_col_lookup: dict[str, str] = {
         p["admin_col"]: p["suv_col"] for p in result.get("col_pairs", [])
     }
-
-    # Include SUV-only diff keys as dedicated output columns.
-    suv_only_diff_cols: list[str] = []
-    for disc in result.get("discrepancies", []):
-        for diff_key in (disc.get("diffs", {}) or {}).keys():
-            if isinstance(diff_key, str) and diff_key.startswith("[SUV] "):
-                label = diff_key.replace("[SUV] ", "SUV::", 1)
-                if label not in suv_only_diff_cols:
-                    suv_only_diff_cols.append(label)
+    admin_key_col: str = result.get("admin_key", "")
 
     SOURCE_COL = 1
-    report_cols = all_admin_cols + suv_only_diff_cols
-    col_to_excel: dict[str, int] = {c: i + 2 for i, c in enumerate(report_cols)}
-
-    def _resolve_suv_value_for_report(
-        suv_row: dict[str, Any],
-        admin_col: str,
-        mapped_suv_col: str | None,
-    ) -> Any:
-        # 1) direct aligned key (preferred)
-        if admin_col in suv_row and suv_row.get(admin_col) not in ("", None):
-            return suv_row.get(admin_col, "")
-        # 2) mapped Suvidha key from backend col_pairs
-        if (
-            mapped_suv_col
-            and mapped_suv_col in suv_row
-            and suv_row.get(mapped_suv_col) not in ("", None)
-        ):
-            return suv_row.get(mapped_suv_col, "")
-        # 3) normalized key fallback
-        target_norm = normalize_column_key(admin_col)
-        mapped_norm = normalize_column_key(mapped_suv_col or "")
-        for suv_col_name, val in (suv_row or {}).items():
-            nk = normalize_column_key(suv_col_name)
-            if nk == target_norm or (mapped_norm and nk == mapped_norm):
-                if val not in ("", None):
-                    return val
-        # 4) fuzzy fallback as last resort
-        best_key = None
-        best_score = 0.0
-        for suv_col_name in (suv_row or {}).keys():
-            score = _similarity(target_norm, normalize_column_key(suv_col_name))
-            if score > best_score:
-                best_score = score
-                best_key = suv_col_name
-        if best_key and best_score >= FUZZY_COLUMN_MATCH_THRESHOLD:
-            return suv_row.get(best_key, "")
-        return ""
+    col_to_excel: dict[str, int] = {c: i + 2 for i, c in enumerate(all_admin_cols)}
 
     def _write_header_row(ws) -> None:
         src_hdr = ws.cell(row=1, column=SOURCE_COL, value="Source")
@@ -1635,21 +1655,7 @@ def generate_discrepancy_report(admin: ParsedDataset, result: dict) -> io.BytesI
 
         for col_name, excel_col in col_to_excel.items():
             cell = ws_disc.cell(row=current_row, column=excel_col)
-            if col_name.startswith("SUV::"):
-                raw_suv_col = col_name.replace("SUV::", "", 1)
-                suv_diff_key = f"[SUV] {raw_suv_col}"
-                if suv_diff_key in diffs:
-                    val = COLUMN_NOT_FOUND
-                    cell.value = val
-                    cell.font = cnf_font
-                    cell.fill = PatternFill("solid", start_color="FFF9C4")
-                    cell.border = _border()
-                    cell.alignment = Alignment(horizontal="left", vertical="center")
-                    continue
-                else:
-                    val = ""
-            else:
-                val = excel_safe_text(admin_row.get(col_name, ""))
+            val = excel_safe_text(admin_row.get(col_name, ""))
 
             if col_name in diff_set:
                 # Mismatch → red font highlight
@@ -1673,21 +1679,6 @@ def generate_discrepancy_report(admin: ParsedDataset, result: dict) -> io.BytesI
         for col_name, excel_col in col_to_excel.items():
             cell = ws_disc.cell(row=current_row, column=excel_col)
 
-            if col_name.startswith("SUV::"):
-                raw_suv_col = col_name.replace("SUV::", "", 1)
-                suv_diff_key = f"[SUV] {raw_suv_col}"
-                if suv_diff_key in diffs:
-                    val = diffs[suv_diff_key].get("suvidha", "")
-                    cell.value = excel_safe_text(val)
-                    cell.font = suv_mismatch_font
-                    cell.fill = PatternFill("solid", start_color="E8F8F3")
-                    cell.border = _border()
-                    cell.alignment = Alignment(horizontal="left", vertical="center")
-                else:
-                    cell.value = ""
-                    _style_cell(cell, fill_hex=SUVIDHA_BG)
-                continue
-
             if col_name in diff_set:
                 val = diffs[col_name].get("suvidha", "")
                 if val == COLUMN_NOT_FOUND:
@@ -1701,17 +1692,16 @@ def generate_discrepancy_report(admin: ParsedDataset, result: dict) -> io.BytesI
                 cell.border = _border()
                 cell.alignment = Alignment(horizontal="left", vertical="center")
             else:
-                # Suvidha rows are already aligned to admin columns in reconcile().
-                # Keep safe fallback to mapped/source column names for backward compatibility.
+                # Use mapped suvidha column name where available
                 suv_col = suv_col_lookup.get(col_name, col_name)
-                val = _resolve_suv_value_for_report(suv_row, col_name, suv_col)
+                val = suv_row.get(suv_col, suv_row.get(col_name, ""))
                 cell.value = excel_safe_text(val)
                 _style_cell(cell, fill_hex=SUVIDHA_BG)
 
         current_row += 1
 
         # ── Separator ─────────────────────────────────────────────────────────
-        for c in range(1, len(report_cols) + 2):
+        for c in range(1, len(all_admin_cols) + 2):
             sep = ws_disc.cell(row=current_row, column=c, value="")
             sep.fill = PatternFill("solid", start_color=SEP_FILL)
             sep.border = _border()
@@ -1788,17 +1778,15 @@ def _parse_manual_mappings(form_value: str | None) -> dict[str, str] | None:
     Optional JSON string from request form:
       {"Admin Col Name": "Suvidha Col Name", ...}
     """
-    merged = dict(MANUAL_MAP)
     if not form_value:
-        return merged if merged else None
+        return None
     try:
         data = json.loads(form_value)
         if isinstance(data, dict):
-            merged.update({str(k): str(v) for k, v in data.items()})
-            return merged
+            return {str(k): str(v) for k, v in data.items()}
     except (json.JSONDecodeError, TypeError):
         pass
-    return merged if merged else None
+    return None
 
 
 @app.route("/")
@@ -1876,59 +1864,78 @@ def header_preview():
         return jsonify({"error": f"Preview failed: {e}"}), 500
 
 
-@app.route("/api/reconcile", methods=["POST"])
-def run_reconcile():
-    admin_file = request.files.get("admin_file")
-    suv_file = request.files.get("suvidha_file")
-    admin_key_raw = request.form.get("admin_key", "").strip()
-    suv_key_raw = request.form.get("suv_key", "").strip()
-
-    if not admin_file or not suv_file:
-        return jsonify({"error": "Both files are required."}), 400
-    if not admin_key_raw or not suv_key_raw:
-        return jsonify({"error": "Key columns must be selected."}), 400
-
+# PATCH START — /reconcile route: delegate to reconcile() instead of inline loop
+@app.route("/reconcile", methods=["POST"])
+def reconcile_api():
     try:
-        admin = parse_uploaded_dataset(
+        admin_file = request.files.get("admin_file")
+        suvidha_file = request.files.get("suvidha_file")
+
+        if not admin_file or not suvidha_file:
+            return jsonify({"error": "Both files are required"}), 400
+
+        admin_key = (request.form.get("admin_key") or "").strip()
+        suv_key = (request.form.get("suvidha_key") or "").strip()
+
+        if not admin_key or not suv_key:
+            return jsonify({"error": "Key columns not selected"}), 400
+
+        admin_ds = parse_uploaded_dataset(
             admin_file,
-            _parse_optional_int(request.form.get("admin_header_row")),
-            _parse_optional_int(request.form.get("admin_header_span")),
+            manual_header_row=_parse_optional_int(request.form.get("admin_header_row")),
+            manual_header_span=_parse_optional_int(
+                request.form.get("admin_header_span")
+            ),
         )
-        suv = parse_uploaded_dataset(
-            suv_file,
-            _parse_optional_int(request.form.get("suv_header_row")),
-            _parse_optional_int(request.form.get("suv_header_span")),
-        )
-        admin_key = (
-            _resolve_key_column("Number", admin.columns)
-            if any(normalize_column_key(c) == normalize_column_key("Number") for c in admin.columns)
-            else _resolve_key_column(admin_key_raw, admin.columns)
-        )
-        suv_key = (
-            _resolve_key_column("GSN", suv.columns)
-            if any(normalize_column_key(c) == normalize_column_key("GSN") for c in suv.columns)
-            else _resolve_key_column(suv_key_raw, suv.columns)
+        suv_ds = parse_uploaded_dataset(
+            suvidha_file,
+            manual_header_row=_parse_optional_int(
+                request.form.get("suvidha_header_row")
+            ),
+            manual_header_span=_parse_optional_int(
+                request.form.get("suvidha_header_span")
+            ),
         )
 
-        # Optional manual column overrides from frontend
+        # Resolve key columns with fuzzy fallback
+        try:
+            admin_key = _resolve_key_column(admin_key, admin_ds.columns)
+        except ReconciliationError:
+            return jsonify(
+                {"error": f"Admin key '{admin_key}' not found in columns"}
+            ), 400
+
+        try:
+            suv_key = _resolve_key_column(suv_key, suv_ds.columns)
+        except ReconciliationError:
+            return jsonify(
+                {"error": f"Suvidha key '{suv_key}' not found in columns"}
+            ), 400
+
         manual_mappings = _parse_manual_mappings(request.form.get("manual_mappings"))
 
-        result = reconcile(admin, suv, admin_key, suv_key, manual_mappings)
-        result["ingestion"] = {
-            "admin": {
-                "detected_header_row": admin.header_row_index + 1,
-                "detected_header_span": admin.header_row_span,
-                "notes": admin.parser_notes,
-                "row_map_size": len(admin.excel_row_numbers),
-            },
-            "suvidha": {
-                "detected_header_row": suv.header_row_index + 1,
-                "detected_header_span": suv.header_row_span,
-                "notes": suv.parser_notes,
-                "row_map_size": len(suv.excel_row_numbers),
-            },
-        }
-        return jsonify(result)
+        # ── Delegate to the single authoritative reconcile() function ─────────
+        result = reconcile(admin_ds, suv_ds, admin_key, suv_key, manual_mappings)
+
+        # ── Normalise response shape ──────────────────────────────────────────
+        # The frontend may use either key name; expose both for compatibility.
+        return jsonify(
+            {
+                # Primary keys (used by generate_discrepancy_report / download)
+                "discrepancies": result["discrepancies"],
+                "only_admin_rows": result["only_admin_rows"],
+                "only_suv_rows": result["only_suv_rows"],
+                # Legacy aliases consumed by older frontend versions
+                "matching_records": result["stats"]["matched"],
+                "only_suvidha_rows": result["only_suv_rows"],
+                # Diagnostic / metadata
+                "stats": result["stats"],
+                "col_pairs": result["col_pairs"],
+                "unmapped": result["unmapped"],
+                "col_mismatch_frequency": result["col_mismatch_frequency"],
+                "meta": result["meta"],
+            }
+        )
 
     except ReconciliationError as e:
         return jsonify({"error": str(e)}), 400
@@ -1937,6 +1944,9 @@ def run_reconcile():
 
         print(f"Reconcile error: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Reconciliation failed: {e}"}), 500
+
+
+# PATCH END
 
 
 @app.route("/api/download", methods=["POST"])
@@ -1960,16 +1970,8 @@ def download():
             _parse_optional_int(request.form.get("suv_header_row")),
             _parse_optional_int(request.form.get("suv_header_span")),
         )
-        admin_key = (
-            _resolve_key_column("Number", admin.columns)
-            if any(normalize_column_key(c) == normalize_column_key("Number") for c in admin.columns)
-            else _resolve_key_column(admin_key_raw, admin.columns)
-        )
-        suv_key = (
-            _resolve_key_column("GSN", suv.columns)
-            if any(normalize_column_key(c) == normalize_column_key("GSN") for c in suv.columns)
-            else _resolve_key_column(suv_key_raw, suv.columns)
-        )
+        admin_key = _resolve_key_column(admin_key_raw, admin.columns)
+        suv_key = _resolve_key_column(suv_key_raw, suv.columns)
 
         manual_mappings = _parse_manual_mappings(request.form.get("manual_mappings"))
         result = reconcile(admin, suv, admin_key, suv_key, manual_mappings)
@@ -1998,4 +2000,3 @@ if __name__ == "__main__":
     print("  http://localhost:5000")
     print("═══════════════════════════════════════\n")
     app.run(debug=True, port=5000)
-
