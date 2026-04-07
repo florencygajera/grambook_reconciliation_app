@@ -1113,6 +1113,7 @@ def reconcile(
 
     discrepancies: list[dict[str, Any]] = []
     matching_records = 0
+    paired_records = 0
     duplicate_key_conflicts: list[dict] = []
 
     # Surplus rows from duplicate-key groups — routed to only_* NOT discrepancies
@@ -1175,11 +1176,22 @@ def reconcile(
                 continue
 
             matched_s_indices.add(best_s_idx)
+            paired_records += 1
 
-            if best_diffs:
+            # Row-level discrepancy decision:
+            # collect all differing columns first, then append exactly one record.
+            row_diffs = best_diffs or {}
+            diff_cols: list[str] = []
+            for col in admin.columns:
+                if col in row_diffs:
+                    diff_cols.append(col)
+            for col in row_diffs:
+                if col not in diff_cols:
+                    diff_cols.append(col)
+
+            if diff_cols:
                 # ── BUCKET: discrepancies ────────────────────────────────────
                 # Rows were paired AND have at least one value difference.
-                diff_cols = list(best_diffs.keys())
                 for dc in diff_cols:
                     col_mismatch_counter[dc] += 1
 
@@ -1192,7 +1204,7 @@ def reconcile(
                         "suvidha_excel_row": best_s_item["excel_row"],
                         "admin_row": a_item["row"],  # FULL row
                         "suv_row": best_s_item["row"],  # FULL row
-                        "diffs": best_diffs,
+                        "diffs": row_diffs,
                         "diff_cols": diff_cols,
                     }
                 )
@@ -1244,6 +1256,7 @@ def reconcile(
             "admin_missing_key_rows": admin_missing_keys,
             "suvidha_missing_key_rows": suv_missing_keys,
             "common_keys": len(common),
+            "paired_records": paired_records,
             "─── buckets ───": "─────────────────────",
             "matching_records": matching_records,
             "discrepancies": disc_count,
@@ -1261,6 +1274,18 @@ def reconcile(
             "validation_note": validation_note,
         },
     )
+
+    if disc_count > paired_records:
+        _debug_log(
+            "reconciliation_warning",
+            {
+                "warning": "discrepancies exceed paired records; check counting logic",
+                "discrepancies": disc_count,
+                "paired_records": paired_records,
+            },
+        )
+
+    total_records = matching_records + disc_count + len(only_admin_rows) + len(only_suv_rows)
 
     return {
         "discrepancies": discrepancies,
@@ -1282,6 +1307,7 @@ def reconcile(
         "col_mismatch_frequency": dict(col_mismatch_counter),
         "meta": {
             "compared_keys": len(common),
+            "paired_records": paired_records,
             "duplicate_key_conflicts": duplicate_key_conflicts,
             "admin_missing_keys": admin_missing_keys,
             "suvidha_missing_keys": suv_missing_keys,
@@ -1294,7 +1320,7 @@ def reconcile(
             },
         },
         "stats": {
-            "total": len(admin_keys | suv_keys),
+            "total": total_records,
             "matched": matching_records,
             "disc": disc_count,
             "only_a": len(only_admin_rows),
