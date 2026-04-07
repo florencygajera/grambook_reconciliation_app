@@ -1290,101 +1290,110 @@ function renderTab(r, tab) {
 // ── discrepancies table ───────────────────────────────────────────────────────
 function renderDisc(r) {
   const details = r.discrepancies || [];
-  if (!details || details.length === 0) {
+  if (!details.length) {
     return `<div class="empty"><div class="ico">OK</div><strong>All clear</strong>All matched records are identical.</div>`;
   }
 
-  const adminColumns = r.admin_cols || [];
-  const colPairs = Array.isArray(r.col_pairs) ? r.col_pairs : [];
-  const adminToSuv = {};
-  colPairs.forEach(p => {
-    if (!p || !p.admin_col || !p.suv_col) return;
-    adminToSuv[String(p.admin_col)] = String(p.suv_col);
+  const adminCols = r.admin_cols || [];
+
+  // ✅ Build column map (admin → suvidha)
+  const columnMap = {};
+  (r.col_pairs || []).forEach(p => {
+    columnMap[p.admin_col] = p.suv_col;
   });
 
+  // ✅ Handle extra SUV-only columns
   const suvOnlyCols = [];
   details.forEach(item => {
-    const diffs = (item && item.diffs) || {};
-    Object.keys(diffs).forEach(k => {
+    Object.keys(item.diffs || {}).forEach(k => {
       if (k.startsWith('[SUV] ')) {
-        const label = `SUV::${k.slice(6)}`;
+        const name = k.replace('[SUV] ', '');
+        const label = `SUV::${name}`;
         if (!suvOnlyCols.includes(label)) suvOnlyCols.push(label);
       }
     });
   });
 
-  const columns = [...adminColumns, ...suvOnlyCols];
+  const columns = [...adminCols, ...suvOnlyCols];
 
-  function normKey(s) {
-    return String(s ?? '').toLowerCase().replace(/[\s_-]+/g, '');
-  }
-
-  function resolveSuvValue(suvRow, adminCol, diffs) {
-    if (adminCol.startsWith('SUV::')) {
-      const raw = adminCol.slice(5);
+  function getSuvValue(suvRow, col, diffs) {
+    // SUV-only column
+    if (col.startsWith('SUV::')) {
+      const raw = col.replace('SUV::', '');
       const key = `[SUV] ${raw}`;
-      return diffs && diffs[key] ? (diffs[key].suvidha ?? '') : '';
+      return diffs[key]?.suvidha ?? '';
     }
 
-    const mapped = adminToSuv[adminCol];
-    if (mapped && suvRow[mapped] !== undefined && suvRow[mapped] !== null) {
-      return suvRow[mapped];
-    }
-    if (suvRow[adminCol] !== undefined && suvRow[adminCol] !== null) {
-      return suvRow[adminCol];
+    // mapped column
+    const mapped = columnMap[col] || col;
+
+    let val = suvRow[mapped];
+
+    // fallback
+    if (val === undefined || val === null || val === '') {
+      val = suvRow[col] ?? '';
     }
 
-    const targetNorms = [normKey(adminCol), normKey(mapped)];
-    for (const k of Object.keys(suvRow || {})) {
-      const nk = normKey(k);
-      if (targetNorms.includes(nk)) return suvRow[k];
+    // handle COLUMN_NOT_FOUND
+    if (val === "COLUMN NOT FOUND") {
+      return "⚠ Missing";
     }
-    return '';
+
+    return val;
   }
 
-  let h = `<div class="tbl-outer"><table><thead><tr>
+  let html = `<div class="tbl-outer"><table><thead><tr>
     <th>Source</th>
-    ${columns.map(col => `<th>${esc(String(col))}</th>`).join('')}
+    ${columns.map(c => `<th>${esc(c)}</th>`).join('')}
   </tr></thead><tbody>`;
 
   details.forEach(item => {
     const adminRow = item.admin_row || {};
-    const suvRow   = item.suv_row   || {};
-    const diffCols = item.diff_cols || [];
-    const diffs = item.diffs || {};
+    const suvRow   = item.suv_row || {};
+    const diffs    = item.diffs || {};
 
-    const diffSet = new Set(diffCols);
+    // build diff set
+    const diffSet = new Set(item.diff_cols || []);
     Object.keys(diffs).forEach(k => {
-      if (k.startsWith('[SUV] ')) diffSet.add(`SUV::${k.slice(6)}`);
+      if (k.startsWith('[SUV] ')) {
+        diffSet.add(`SUV::${k.replace('[SUV] ', '')}`);
+      }
     });
 
-    h += `<tr class="a-row">
+    // ── ADMIN ROW ──
+    html += `<tr class="a-row">
       <td><span class="badge-src a">Admin</span></td>
       ${columns.map(col => {
-        const cls = diffSet.has(col) ? ' class="diff"' : '';
+        const isDiff = diffSet.has(col);
+
+        let val;
         if (col.startsWith('SUV::')) {
-          const raw = col.slice(5);
+          const raw = col.replace('SUV::', '');
           const key = `[SUV] ${raw}`;
-          const val = diffs[key] ? (diffs[key].admin ?? 'COLUMN NOT FOUND') : '';
-          return `<td${cls}>${esc(String(val ?? ''))}</td>`;
+          val = diffs[key]?.admin ?? 'COLUMN NOT FOUND';
+        } else {
+          val = adminRow[col] ?? '';
         }
-        return `<td${cls}>${esc(String(adminRow[col] ?? ''))}</td>`;
+
+        return `<td class="${isDiff ? 'diff' : ''}">${esc(val)}</td>`;
       }).join('')}
     </tr>`;
 
-    h += `<tr class="s-row">
+    // ── SUVIDHA ROW (FIXED 🔥) ──
+    html += `<tr class="s-row">
       <td><span class="badge-src s">Suvidha</span></td>
       ${columns.map(col => {
-        const cls = diffSet.has(col) ? ' class="diff"' : '';
-        const val = resolveSuvValue(suvRow, col, diffs);
-        return `<td${cls}>${esc(String(val ?? ''))}</td>`;
+        const isDiff = diffSet.has(col);
+        const val = getSuvValue(suvRow, col, diffs);
+        return `<td class="${isDiff ? 'diff' : ''}">${esc(val)}</td>`;
       }).join('')}
     </tr>`;
 
-    h += `<tr class="sep"><td colspan="${columns.length + 1}"></td></tr>`;
+    html += `<tr class="sep"><td colspan="${columns.length + 1}"></td></tr>`;
   });
 
-  return h + '</tbody></table></div>';
+  html += `</tbody></table></div>`;
+  return html;
 }
 // -- only-in-one table ─────────────────────────────────────────────────────────
 function renderOnly(rows, cols, rowCls) {
