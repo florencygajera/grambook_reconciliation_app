@@ -1,1874 +1,516 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Grambook Reconciliation</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-
 <style>
 :root {
-  --bg:        #f8f7f4;
-  --surface:   #ffffff;
-  --card:      #ffffff;
-  --border:    #e5e2db;
-  --border2:   #d0ccc4;
-  --ink:       #1a1814;
-  --ink2:      #4a4740;
-  --muted:     #928e87;
-  --rule:      #c8c4bc;
-
-  --admin-h:   #b5451b;
-  --admin-l:   #fdf1ed;
-  --admin-m:   #f0d5cc;
-  --suv-h:     #1a6b4a;
-  --suv-l:     #edf5f1;
-  --suv-m:     #c8e5d8;
-
-  --accent:    #2c4a8c;
-  --accent-l:  #eef1f9;
-  --warn:      #b5451b;
-  --ok:        #1a6b4a;
-  --only-a:    #b5451b;
-  --only-s:    #1a6b4a;
-
-  --shadow-sm: 0 1px 3px rgba(26,24,20,.07), 0 1px 2px rgba(26,24,20,.04);
-  --shadow-md: 0 4px 16px rgba(26,24,20,.08), 0 2px 6px rgba(26,24,20,.05);
-  --shadow-lg: 0 12px 40px rgba(26,24,20,.1), 0 4px 12px rgba(26,24,20,.06);
-
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 14px;
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --border: #d9dee7;
+  --ink: #1f2937;
+  --muted: #6b7280;
+  --accent: #284b8f;
+  --warn: #b45309;
+  --good: #166534;
+  --bad: #b91c1c;
+  --shadow: 0 8px 24px rgba(31, 41, 55, 0.08);
+  --radius: 12px;
 }
-
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
+* { box-sizing: border-box; }
 body {
-  font-family: 'DM Sans', sans-serif;
+  margin: 0;
+  font-family: Arial, sans-serif;
   background: var(--bg);
   color: var(--ink);
-  min-height: 100vh;
-  overflow-x: hidden;
 }
-
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: .4;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='.06'/%3E%3C/svg%3E");
-}
-
 .wrap {
-  position: relative;
-  z-index: 1;
-  max-width: 1080px;
+  max-width: 1100px;
   margin: 0 auto;
-  padding: 0 28px 100px;
+  padding: 24px;
 }
-
-header {
-  padding: 52px 0 44px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 56px;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-}
-
-.wordmark {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.wordmark-icon {
-  width: 34px;
-  height: 34px;
-  background: var(--ink);
-  border-radius: var(--r-sm);
-  display: grid;
-  place-items: center;
-  font-size: 16px;
-  flex-shrink: 0;
-  position: relative;
-  top: -1px;
-}
-
-header h1 {
-  font-family: 'Playfair Display', serif;
-  font-size: 2rem;
-  font-weight: 600;
-  letter-spacing: -.03em;
-  color: var(--ink);
-  line-height: 1;
-}
-
-header h1 em { font-style: normal; color: var(--accent); }
-
-header .tagline {
-  font-size: .82rem;
-  color: var(--muted);
-  font-weight: 300;
-  letter-spacing: .01em;
-  max-width: 420px;
-  line-height: 1.6;
-}
-
-.header-badge {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 16px;
-  background: var(--surface);
+.header,
+.panel,
+.results,
+.error,
+.card {
+  background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 30px;
-  font-size: .72rem;
-  font-family: 'DM Mono', monospace;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.header {
+  padding: 20px 22px;
+  margin-bottom: 16px;
+}
+.header h1 {
+  margin: 0 0 6px;
+  font-size: 1.5rem;
+}
+.header p {
+  margin: 0;
   color: var(--muted);
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  box-shadow: var(--shadow-sm);
-  white-space: nowrap;
 }
-
-.header-badge::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  background: var(--ok);
-  border-radius: 50%;
-  flex-shrink: 0;
-  animation: pulse-dot 2.5s ease-in-out infinite;
+.error {
+  display: none;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-left: 4px solid var(--bad);
+  color: var(--bad);
 }
-
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .5; transform: scale(1.3); }
-}
-
-.section-label {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: 'DM Mono', monospace;
-  font-size: .67rem;
-  text-transform: uppercase;
-  letter-spacing: .12em;
-  color: var(--muted);
-  margin-bottom: 20px;
-}
-
-.section-label::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border);
-}
-
-.upload-grid {
+.error.show { display: block; }
+.grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 16px;
 }
-
-@media (max-width: 640px) { .upload-grid { grid-template-columns: 1fr; } }
-
-.upload-card {
-  background: var(--surface);
-  border: 1.5px dashed var(--border2);
-  border-radius: var(--r-lg);
-  padding: 32px 28px;
-  cursor: pointer;
-  position: relative;
-  overflow: hidden;
-  transition: border-color .2s, box-shadow .2s, transform .15s;
-  box-shadow: var(--shadow-sm);
+@media (max-width: 720px) {
+  .grid { grid-template-columns: 1fr; }
 }
-
-.upload-card::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: var(--r-lg);
-  pointer-events: none;
-  transition: opacity .2s;
-  opacity: 0;
+.card {
+  padding: 18px;
 }
-
-.upload-card:hover { border-style: solid; transform: translateY(-1px); box-shadow: var(--shadow-md); }
-.upload-card.admin:hover { border-color: var(--admin-h); }
-.upload-card.admin:hover::after { background: var(--admin-l); opacity: .3; }
-.upload-card.suvidha:hover { border-color: var(--suv-h); }
-.upload-card.suvidha:hover::after { background: var(--suv-l); opacity: .3; }
-
-.upload-card.dragover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
-.upload-card.admin.dragover { border-color: var(--admin-h); border-style: solid; }
-.upload-card.suvidha.dragover { border-color: var(--suv-h); border-style: solid; }
-
-.upload-card.ready { border-style: solid; }
-.upload-card.admin.ready { border-color: var(--admin-h); background: var(--admin-l); }
-.upload-card.suvidha.ready { border-color: var(--suv-h); background: var(--suv-l); }
-
-.upload-card input[type=file] {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
-  font-size: 0;
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
 }
-
-.uc-source {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: 'DM Mono', monospace;
-  font-size: .66rem;
-  text-transform: uppercase;
-  letter-spacing: .1em;
-  margin-bottom: 18px;
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-weight: 500;
-}
-
-.admin .uc-source { color: var(--admin-h); background: var(--admin-m); }
-.suvidha .uc-source { color: var(--suv-h); background: var(--suv-m); }
-
-.uc-icon { font-size: 2rem; display: block; margin-bottom: 14px; line-height: 1; }
-.upload-card h3 { font-size: .95rem; font-weight: 600; letter-spacing: -.01em; margin-bottom: 6px; }
-.upload-card .hint { font-size: .76rem; color: var(--muted); font-weight: 300; }
-
-.file-ready {
-  display: none;
-  margin-top: 16px;
-  align-items: center;
-  gap: 9px;
-  font-family: 'DM Mono', monospace;
-  font-size: .76rem;
-  padding: 8px 12px;
-  border-radius: var(--r-sm);
-}
-
-.admin .file-ready { color: var(--admin-h); background: var(--admin-m); }
-.suvidha .file-ready { color: var(--suv-h); background: var(--suv-m); }
-.upload-card.ready .file-ready { display: flex; }
-.upload-card.ready .placeholder { display: none; }
-
-.map-panel {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: 32px;
-  margin-bottom: 20px;
-  display: none;
-  box-shadow: var(--shadow-sm);
-  animation: fadeUp .3s ease;
-}
-
-.map-panel.show { display: block; }
-
-.map-panel-sub {
-  font-size: .78rem;
+.hint {
+  margin: 0 0 12px;
   color: var(--muted);
-  margin-bottom: 28px;
-  font-weight: 300;
+  font-size: 0.9rem;
 }
-
-.header-config {
-  background: var(--accent-l);
-  border: 1px solid rgba(44,74,140,.15);
-  border-radius: var(--r-md);
-  padding: 22px 24px;
-  margin-bottom: 28px;
-}
-
-.header-config-title {
-  font-size: .8rem;
-  font-weight: 600;
+.file-name {
+  margin-top: 10px;
+  font-size: 0.9rem;
   color: var(--accent);
-  margin-bottom: 4px;
-  letter-spacing: -.01em;
+  word-break: break-all;
 }
-
-.header-config-sub {
-  font-size: .73rem;
-  color: var(--muted);
-  margin-bottom: 18px;
-  font-weight: 300;
-}
-
-.header-row {
+.controls {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  margin-bottom: 12px;
-}
-
-.header-row:last-child { margin-bottom: 0; }
-
-.map-row {
-  display: grid;
-  grid-template-columns: 1fr 48px 1fr;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
   align-items: end;
-  gap: 14px;
+  margin-bottom: 16px;
 }
-
-.map-field label {
+@media (max-width: 720px) {
+  .controls { grid-template-columns: 1fr; }
+}
+label {
   display: block;
-  font-family: 'DM Mono', monospace;
-  font-size: .67rem;
-  text-transform: uppercase;
-  letter-spacing: .09em;
-  color: var(--muted);
   margin-bottom: 8px;
-  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--muted);
 }
-
-.map-field label.adm { color: var(--admin-h); }
-.map-field label.suv { color: var(--suv-h); }
-
-.map-field select {
+select, button {
+  font: inherit;
+}
+select {
   width: 100%;
-  background: var(--surface);
-  border: 1px solid var(--border2);
-  border-radius: var(--r-sm);
-  padding: 10px 36px 10px 13px;
-  color: var(--ink);
-  font-family: 'DM Mono', monospace;
-  font-size: .78rem;
-  outline: none;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+}
+.buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+button {
+  border: 0;
+  border-radius: 10px;
+  padding: 12px 18px;
   cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23928e87' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-  transition: border-color .15s, box-shadow .15s;
-  box-shadow: var(--shadow-sm);
+  font-weight: 700;
 }
-
-.map-field select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(44,74,140,.1);
-}
-
-.map-arrow { text-align: center; color: var(--muted); font-size: 1.1rem; padding-bottom: 10px; opacity: .5; }
-
-.btn-wrap { display: flex; justify-content: center; margin-bottom: 52px; }
-
-.btn-submit {
-  background: var(--ink);
-  border: none;
-  border-radius: var(--r-md);
-  padding: 15px 56px;
-  font-size: .92rem;
-  font-weight: 600;
+.primary {
+  background: var(--accent);
   color: #fff;
-  cursor: pointer;
-  font-family: 'DM Sans', sans-serif;
-  letter-spacing: -.01em;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  transition: background .18s, transform .15s, box-shadow .18s;
-  box-shadow: 0 2px 8px rgba(26,24,20,.2);
 }
-
-.btn-submit:hover:not(:disabled) {
-  background: #2c2a25;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(26,24,20,.22);
-}
-
-.btn-submit:disabled { background: var(--rule); cursor: not-allowed; transform: none; box-shadow: none; }
-
-.stats-bar {
-  display: none;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
-  margin-bottom: 44px;
-  animation: fadeUp .4s ease;
-}
-
-.stats-bar.show { display: grid; }
-
-@media (max-width: 700px) { .stats-bar { grid-template-columns: repeat(2, 1fr); } }
-
-.stat {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 20px 18px;
-  text-align: center;
-  box-shadow: var(--shadow-sm);
-  position: relative;
-  overflow: hidden;
-}
-
-.stat::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 2px;
-  background: var(--border);
-}
-
-.stat.ok::before { background: var(--ok); }
-.stat.disc::before { background: var(--warn); }
-.stat.oa::before { background: var(--admin-h); }
-.stat.os::before { background: var(--suv-h); }
-
-.stat .num {
-  font-family: 'Playfair Display', serif;
-  font-size: 2.1rem;
-  font-weight: 600;
-  line-height: 1;
+.secondary {
+  background: #e5e7eb;
   color: var(--ink);
 }
-
-.stat.ok .num { color: var(--ok); }
-.stat.disc .num { color: var(--warn); }
-.stat.oa .num { color: var(--admin-h); }
-.stat.os .num { color: var(--suv-h); }
-
-.stat .lbl {
-  font-size: .66rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: .09em;
-  margin-top: 7px;
-  font-family: 'DM Mono', monospace;
-}
-
-.err-banner {
-  background: #fff8f6;
-  border: 1px solid var(--admin-m);
-  border-left: 3px solid var(--admin-h);
-  border-radius: var(--r-sm);
-  padding: 13px 18px;
-  font-size: .82rem;
-  color: var(--admin-h);
-  margin-bottom: 24px;
-  display: none;
-}
-
-.err-banner.show { display: block; }
-
-#results { display: none; }
-#results.show { display: block; animation: fadeUp .4s ease; }
-
-.results-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 22px;
-  flex-wrap: wrap;
-  gap: 14px;
-}
-
-.results-title {
-  font-family: 'Playfair Display', serif;
-  font-size: 1.2rem;
-  font-weight: 500;
-  letter-spacing: -.02em;
-}
-
-.btn-dl {
-  background: var(--surface);
-  border: 1px solid var(--border2);
-  color: var(--ink2);
-  border-radius: var(--r-sm);
-  padding: 9px 20px;
-  font-size: .8rem;
-  font-weight: 500;
-  cursor: pointer;
-  font-family: 'DM Sans', sans-serif;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  transition: background .15s, border-color .15s;
-  box-shadow: var(--shadow-sm);
-}
-
-.btn-dl:hover { background: var(--bg); border-color: var(--ink); }
-.btn-dl:disabled { opacity: .4; cursor: not-allowed; }
-
-.tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 20px;
-  border-bottom: 1px solid var(--border);
-}
-
-.tab {
-  padding: 10px 18px;
-  font-size: .8rem;
-  font-weight: 500;
-  cursor: pointer;
-  color: var(--muted);
-  border: none;
-  background: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  transition: color .15s, border-color .15s;
-  user-select: none;
-  letter-spacing: -.01em;
-}
-
-.tab:hover { color: var(--ink); }
-
-.tab .badge {
-  display: inline-block;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1px 8px;
-  font-family: 'DM Mono', monospace;
-  font-size: .65rem;
-  margin-left: 6px;
-  vertical-align: middle;
-}
-
-.tab.active { color: var(--ink); }
-.tab[data-tab=disc].active { color: var(--warn); border-bottom-color: var(--warn); }
-.tab[data-tab=oa].active { color: var(--admin-h); border-bottom-color: var(--admin-h); }
-.tab[data-tab=os].active { color: var(--suv-h); border-bottom-color: var(--suv-h); }
-
-.tbl-outer {
-  overflow-x: auto;
-  border-radius: var(--r-md);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-sm);
-}
-
-table { width: 100%; border-collapse: collapse; font-size: .77rem; }
-thead tr { background: var(--bg); }
-
-thead th {
-  padding: 11px 14px;
-  text-align: left;
-  font-family: 'DM Mono', monospace;
-  font-size: .64rem;
-  text-transform: uppercase;
-  letter-spacing: .08em;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-  position: sticky;
-  top: 0;
-  background: var(--bg);
-}
-
-tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
-tbody tr:last-child { border-bottom: none; }
-td { padding: 10px 14px; vertical-align: middle; }
-
-tr.a-row td { background: rgba(181,69,27,.04); }
-tr.s-row td { background: rgba(26,107,74,.04); }
-tr.a-row td.diff { background: rgba(181,69,27,.12); color: var(--admin-h); font-weight: 600; }
-tr.s-row td.diff { background: rgba(26,107,74,.12); color: var(--suv-h); font-weight: 600; }
-tr.sep td { padding: 3px; background: var(--bg); }
-
-.badge-src {
-  display: inline-block;
-  padding: 2px 9px;
-  border-radius: 4px;
-  font-family: 'DM Mono', monospace;
-  font-size: .63rem;
-  font-weight: 600;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-}
-
-.badge-src.a { background: var(--admin-m); color: var(--admin-h); }
-.badge-src.s { background: var(--suv-m); color: var(--suv-h); }
-
-tr.oa-row td { background: rgba(181,69,27,.04); }
-tr.os-row td { background: rgba(26,107,74,.04); }
-
-tr.a-row:hover td { background: rgba(181,69,27,.07); }
-tr.s-row:hover td { background: rgba(26,107,74,.07); }
-tr.oa-row:hover td { background: rgba(181,69,27,.07); }
-tr.os-row:hover td { background: rgba(26,107,74,.07); }
-
-.preview-block { margin-top: 28px; animation: fadeUp .3s ease; }
-
-.preview-tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.preview-tab {
-  padding: 8px 16px;
-  font-size: .76rem;
-  font-weight: 500;
-  cursor: pointer;
-  color: var(--muted);
-  border: none;
-  background: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  transition: color .15s, border-color .15s;
-  user-select: none;
-  font-family: 'DM Sans', sans-serif;
-}
-
-.preview-tab:hover { color: var(--ink); }
-.preview-tab.admin.active  { color: var(--admin-h); border-bottom-color: var(--admin-h); }
-.preview-tab.suvidha.active { color: var(--suv-h); border-bottom-color: var(--suv-h); }
-
-.preview-pane { display: none; }
-.preview-pane.active { display: block; }
-
-.preview-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-top: none;
-  font-size: .72rem;
-  font-family: 'DM Mono', monospace;
-  color: var(--muted);
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.preview-meta-item { display: flex; align-items: center; gap: 6px; }
-.preview-meta-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-.preview-meta-dot.admin { background: var(--admin-h); }
-.preview-meta-dot.suvidha { background: var(--suv-h); }
-
-.preview-tbl-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 var(--r-md) var(--r-md);
-  max-height: 280px;
-  overflow-y: auto;
-}
-
-.preview-tbl-wrap table { font-size: .74rem; }
-.preview-tbl-wrap thead th { position: sticky; top: 0; z-index: 2; white-space: nowrap; }
-.preview-tbl-wrap tbody tr.admin-preview:hover td  { background: rgba(181,69,27,.07); }
-.preview-tbl-wrap tbody tr.suvidha-preview:hover td { background: rgba(26,107,74,.07); }
-.preview-tbl-wrap td { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.preview-loading {
-  padding: 28px;
-  text-align: center;
-  color: var(--muted);
-  font-size: .8rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 var(--r-md) var(--r-md);
-}
-
-.preview-row-count {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-family: 'DM Mono', monospace;
-  font-size: .64rem;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-weight: 500;
-}
-.preview-row-count.admin   { background: var(--admin-m); color: var(--admin-h); }
-.preview-row-count.suvidha { background: var(--suv-m);   color: var(--suv-h); }
-
-.mapping-conflicts {
-  margin-top: 20px;
-  padding: 16px;
-  border: 1px solid rgba(44,74,140,.18);
-  border-radius: var(--r-md);
-  background: #f8faff;
-  display: none;
-}
-
-.mapping-conflicts.show { display: block; }
-.mapping-conflicts h4 {
-  font-size: .82rem;
-  margin-bottom: 6px;
-  color: var(--accent);
-}
-.mapping-conflicts p {
-  font-size: .75rem;
-  color: var(--muted);
-  margin-bottom: 14px;
-}
-.conflict-list {
-  display: grid;
-  gap: 12px;
-}
-.conflict-item {
-  display: grid;
-  grid-template-columns: 1.2fr .9fr 1.4fr;
-  gap: 10px;
-  align-items: center;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--surface);
-}
-.conflict-item .label {
-  font-family: 'DM Mono', monospace;
-  font-size: .72rem;
-  color: var(--ink);
-}
-.conflict-item .label small {
-  display: block;
-  margin-top: 3px;
-  color: var(--muted);
-}
-.conflict-item select {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--border2);
-  border-radius: var(--r-sm);
-  font-family: 'DM Mono', monospace;
-  font-size: .75rem;
-}
-
-.pagination-bar {
-  display: none;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 18px 0 20px;
-}
-.pagination-bar.show { display: flex; }
-.page-btn, .page-chip {
-  border: 1px solid var(--border2);
-  background: var(--surface);
-  border-radius: var(--r-sm);
-  padding: 8px 12px;
-  font-family: 'DM Mono', monospace;
-  font-size: .72rem;
-  color: var(--ink2);
-}
-.page-btn {
-  cursor: pointer;
-}
-.page-btn:disabled {
-  opacity: .45;
+button:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
 }
-.page-chip.active {
-  background: var(--ink);
-  color: #fff;
-  border-color: var(--ink);
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
 }
-
-.empty { padding: 64px; text-align: center; color: var(--muted); font-size: .85rem; }
-.empty .ico { font-size: 2.4rem; margin-bottom: 12px; display: block; }
-.empty strong { display: block; color: var(--ink2); margin-bottom: 4px; font-weight: 500; }
-
-.spin {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(255,255,255,.3);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: rot .65s linear infinite;
+@media (max-width: 720px) {
+  .stats { grid-template-columns: 1fr; }
 }
-
-.footer {
-  margin-top: 64px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-family: 'DM Mono', monospace;
-  font-size: .66rem;
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+.stat .num {
+  font-size: 1.8rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.stat .lbl {
+  margin-top: 6px;
   color: var(--muted);
-  letter-spacing: .06em;
+  font-size: 0.82rem;
 }
-
-@keyframes rot { to { transform: rotate(360deg); } }
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: none; }
+.results {
+  padding: 18px;
 }
-
-@media (max-width: 640px) {
-  header { flex-direction: column; align-items: flex-start; padding: 36px 0 32px; }
-  .header-badge { align-self: flex-start; }
-  header h1 { font-size: 1.6rem; }
-  .map-row { grid-template-columns: 1fr; }
-  .map-arrow { display: none; }
-  .header-row { grid-template-columns: 1fr; }
+.section {
+  margin-top: 18px;
+}
+.section h2 {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+}
+.section p {
+  margin: 0 0 10px;
+  color: var(--muted);
+}
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+th, td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+th {
+  background: #f8fafc;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  position: sticky;
+  top: 0;
+}
+tr:last-child td { border-bottom: 0; }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.badge.bad { background: #fee2e2; color: var(--bad); }
+.badge.good { background: #dcfce7; color: var(--good); }
+.badge.warn { background: #fef3c7; color: var(--warn); }
+.diff-cell {
+  background: #fff7ed;
+  color: var(--warn);
+  font-weight: 700;
+}
+.empty {
+  padding: 18px;
+  color: var(--muted);
 }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <div class="header">
+    <h1>Grambook Reconciliation</h1>
+    <p>Upload both files, choose one unique ID column, and compare rows by position only.</p>
+  </div>
 
-  <!-- HEADER -->
-  <header>
-    <div class="header-left">
-      <div class="wordmark">
-        <div class="wordmark-icon">⚖️</div>
-        <h1>Grambook <em>Reconciliation</em></h1>
-      </div>
-      <p class="tagline">Upload Admin &amp; Suvidha exports — compare every field — download your discrepancy report.</p>
+  <div class="error" id="errBanner"></div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Admin file</h3>
+      <p class="hint">Upload the Admin Excel or CSV file.</p>
+      <input type="file" id="adminFile" accept=".xlsx,.xls,.csv" />
+      <div class="file-name" id="adminName"></div>
     </div>
-    <div class="header-badge">Data Audit Tool</div>
-  </header>
-
-  <!-- ERROR -->
-  <div class="err-banner" id="errBanner"></div>
-
-  <!-- SECTION: UPLOAD -->
-  <div class="section-label">01 — Upload Files</div>
-
-  <div class="upload-grid">
-    <div class="upload-card admin" id="adminCard">
-      <input type="file" id="adminFile" accept=".xlsx,.xls,.csv"/>
-      <div class="placeholder">
-        <div class="uc-source">⬡ GrambookAdmin</div>
-        <span class="uc-icon">📋</span>
-        <h3>Admin Excel File</h3>
-        <p class="hint">Drop file here or click to browse — .xlsx / .xls / .csv</p>
-      </div>
-      <div class="file-ready" id="adminReady"><span>✓</span><span id="adminFname"></span></div>
-    </div>
-
-    <div class="upload-card suvidha" id="suvidhaCard">
-      <input type="file" id="suvidhaFile" accept=".xlsx,.xls,.csv"/>
-      <div class="placeholder">
-        <div class="uc-source">⬡ GrambookSuvidha</div>
-        <span class="uc-icon">🌐</span>
-        <h3>Suvidha Excel File</h3>
-        <p class="hint">Drop file here or click to browse — .xlsx / .xls / .csv</p>
-      </div>
-      <div class="file-ready" id="suvidhaReady"><span>✓</span><span id="suvidhaFname"></span></div>
+    <div class="card">
+      <h3>Suvidha file</h3>
+      <p class="hint">Upload the Suvidha Excel or CSV file.</p>
+      <input type="file" id="suvidhaFile" accept=".xlsx,.xls,.csv" />
+      <div class="file-name" id="suvidhaName"></div>
     </div>
   </div>
 
-  <!-- MAPPING -->
-  <div class="map-panel" id="mapPanel">
-    <div class="section-label" style="margin-bottom:18px">02 — Configure Mapping</div>
-    <p class="map-panel-sub">Select the column in each file that uniquely identifies the same record (e.g. Property ID, Citizen Code, Transaction No).</p>
-
-    <!-- Header Config -->
-    <div class="header-config">
-      <div class="header-config-title">Header Configuration</div>
-      <p class="header-config-sub">Configure how many rows contain header information (titles, sub-headers, etc.)</p>
-      <div class="header-row">
-        <div class="map-field">
-          <label class="adm">Admin — header row start</label>
-          <select id="adminHeaderRow" disabled>
-            <option value="1">Row 1</option>
-            <option value="2" selected>Row 2</option>
-            <option value="3">Row 3</option>
-            <option value="4">Row 4</option>
-            <option value="5">Row 5</option>
-          </select>
-        </div>
-        <div class="map-field">
-          <label class="adm">Admin — header span</label>
-          <select id="adminHeaderSpan" disabled>
-            <option value="1">1 row</option>
-            <option value="2">2 rows</option>
-            <option value="3" selected>3 rows</option>
-            <option value="4">4 rows</option>
-            <option value="5">5 rows</option>
-          </select>
-        </div>
+  <div class="panel" style="padding:18px; margin-bottom:16px;">
+    <div class="controls">
+      <div>
+        <label for="idColumn">Unique ID column</label>
+        <select id="idColumn"></select>
       </div>
-      <div class="header-row">
-        <div class="map-field">
-          <label class="suv">Suvidha — header row start</label>
-          <select id="suvidhaHeaderRow" disabled>
-            <option value="1" selected>Row 1</option>
-            <option value="2">Row 2</option>
-            <option value="3">Row 3</option>
-            <option value="4">Row 4</option>
-            <option value="5">Row 5</option>
-          </select>
-        </div>
-        <div class="map-field">
-          <label class="suv">Suvidha — header span</label>
-          <select id="suvidhaHeaderSpan" disabled>
-            <option value="1">1 row</option>
-            <option value="2" selected>2 rows</option>
-            <option value="3">3 rows</option>
-            <option value="4">4 rows</option>
-            <option value="5">5 rows</option>
-          </select>
-        </div>
-      </div>
-      <div class="header-row" style="grid-template-columns:1fr">
-        <div class="map-field">
-          <label>Default Date Mode</label>
-          <select id="dateMode" disabled>
-            <option value="auto" selected>Auto</option>
-            <option value="strict">Strict</option>
-            <option value="day_first">DD-MM</option>
-            <option value="month_first">MM-DD</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
-    <!-- Key Column Selection -->
-    <div class="map-row">
-      <div class="map-field">
-        <label class="adm">Admin — key column</label>
-        <select id="adminKey"></select>
-      </div>
-      <div class="map-arrow">⇄</div>
-      <div class="map-field">
-        <label class="suv">Suvidha — key column</label>
-        <select id="suvidhaKey"></select>
-      </div>
-    </div>
-
-    <div class="mapping-conflicts" id="mappingConflicts">
-      <h4>Column Mapping Confirmation Required</h4>
-      <p>Resolve these ambiguous columns before comparing. Select the exact Suvidha column for each Admin field.</p>
-      <div class="conflict-list" id="mappingConflictList"></div>
-    </div>
-
-    <!-- Live Data Preview -->
-    <div class="preview-block" id="previewBlock" style="display:none">
-      <div class="section-label" style="margin-bottom:0">03 — Data Preview</div>
-
-      <div class="preview-tabs">
-        <div class="preview-tab admin active" data-preview="admin">
-          GrambookAdmin &nbsp;<span class="preview-row-count admin" id="adminRowCount">—</span>
-        </div>
-        <div class="preview-tab suvidha" data-preview="suvidha">
-          GrambookSuvidha &nbsp;<span class="preview-row-count suvidha" id="suvidhaRowCount">—</span>
-        </div>
-      </div>
-
-      <div id="adminPreviewPane" class="preview-pane active">
-        <div class="preview-loading" id="adminPreviewLoading">
-          <span class="spin" style="border-color:rgba(181,69,27,.2);border-top-color:var(--admin-h)"></span> Reading rows…
-        </div>
-        <div id="adminPreviewMeta" class="preview-meta" style="display:none"></div>
-        <div class="preview-tbl-wrap" id="adminPreviewTbl" style="display:none"></div>
-      </div>
-
-      <div id="suvidhaPreviewPane" class="preview-pane">
-        <div class="preview-loading" id="suvidhaPreviewLoading">
-          <span class="spin" style="border-color:rgba(26,107,74,.2);border-top-color:var(--suv-h)"></span> Reading rows…
-        </div>
-        <div id="suvidhaPreviewMeta" class="preview-meta" style="display:none"></div>
-        <div class="preview-tbl-wrap" id="suvidhaPreviewTbl" style="display:none"></div>
+      <div class="buttons">
+        <button class="primary" id="compareBtn" disabled>Compare Files</button>
+        <button class="secondary" id="downloadBtn" disabled>Download Report</button>
       </div>
     </div>
   </div>
 
-  <!-- SUBMIT -->
-  <div class="btn-wrap">
-    <button class="btn-submit" id="submitBtn" disabled>
-      <span id="btnTxt">Compare Files</span>
-      <span id="btnIco">→</span>
-    </button>
-  </div>
-
-  <!-- STATS -->
-  <div class="stats-bar" id="statsBar">
-    <div class="stat"><div class="num" id="sTotal">0</div><div class="lbl">Total Records</div></div>
-    <div class="stat ok"><div class="num" id="sMatch">0</div><div class="lbl">Matched</div></div>
-    <div class="stat disc"><div class="num" id="sDisc">0</div><div class="lbl">Mismatched</div></div>
-    <div class="stat oa"><div class="num" id="sOA">0</div><div class="lbl">Only in Admin</div></div>
-    <div class="stat os"><div class="num" id="sOS">0</div><div class="lbl">Only in Suvidha</div></div>
-  </div>
-
-  <!-- RESULTS -->
-  <div id="results">
-    <div class="results-header">
-      <div class="results-title">Comparison Results</div>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <select id="pageSize" style="padding:9px 12px;border:1px solid var(--border2);border-radius:6px;font-family:'DM Mono',monospace;font-size:.72rem">
-          <option value="50">50 / page</option>
-          <option value="100">100 / page</option>
-          <option value="200" selected>200 / page</option>
-          <option value="500">500 / page</option>
-        </select>
-        <button class="btn-dl" id="dlBtn">⬇&nbsp; Download Report (.xlsx)</button>
-      </div>
+  <div class="stats" id="stats" style="display:none;">
+    <div class="stat">
+      <div class="num" id="statTotal">0</div>
+      <div class="lbl">Total matched IDs</div>
     </div>
-
-    <div class="tabs">
-      <div class="tab active" data-tab="disc">Discrepancies <span class="badge" id="tDisc">0</span></div>
-      <div class="tab" data-tab="oa">Only in Admin <span class="badge" id="tOA">0</span></div>
-      <div class="tab" data-tab="os">Only in Suvidha <span class="badge" id="tOS">0</span></div>
+    <div class="stat">
+      <div class="num" id="statMismatch">0</div>
+      <div class="lbl">Mismatches</div>
     </div>
-
-    <div class="pagination-bar" id="paginationBar"></div>
-
-    <div id="tabContent"></div>
+    <div class="stat">
+      <div class="num" id="statOnly">0</div>
+      <div class="lbl">Only in one file</div>
+    </div>
   </div>
 
-  <!-- FOOTER -->
-  <div class="footer">
-    <span>Grambook Reconciliation</span>
-    <span>Internal Audit Tool</span>
+  <div class="results" id="results" style="display:none;">
+    <div class="section">
+      <h2>Discrepancies</h2>
+      <div id="mismatchWrap"></div>
+    </div>
+    <div class="section">
+      <h2>Only in Admin</h2>
+      <div id="adminOnlyWrap"></div>
+    </div>
+    <div class="section">
+      <h2>Only in Suvidha</h2>
+      <div id="suvidhaOnlyWrap"></div>
+    </div>
   </div>
-
 </div>
 
 <script>
-// ── state ─────────────────────────────────────────────────────────────────────
-let adminFile   = null;
+let adminFile = null;
 let suvidhaFile = null;
-let lastResult  = null;
-let activeTab   = 'disc';
-let fetching    = false;
-let previewData = { admin: null, suvidha: null };
-let columnsReqSeq = 0;
-let previewReqSeq = { admin: 0, suvidha: 0 };
-let columnsAbort = null;
-let previewAbort = { admin: null, suvidha: null };
-let compareAbort = null;
-let downloadAbort = null;
-let columnsLoaded = false;
+let lastResult = null;
 let csrfToken = '';
-const REQUEST_TIMEOUT_MS = 90000;
-let currentView = 'disc';
-let currentPage = 1;
-let currentPageSize = 200;
-let currentPagination = null;
-let currentData = [];
-let mappingConflicts = [];
-let manualMappings = {};
+
 const csrfReady = fetch('/api/csrf')
   .then(r => r.json())
   .then(data => { csrfToken = data.token || ''; })
   .catch(() => { csrfToken = ''; });
 
-// ── file pickers ──────────────────────────────────────────────────────────────
-function setupPicker(inputId, cardId, nameId, readyId, which) {
-  const input = document.getElementById(inputId);
-  const card  = document.getElementById(cardId);
-
-  input.addEventListener('change', () => {
-    const f = input.files[0];
-    if (!f) return;
-    if (which === 'admin') adminFile = f; else suvidhaFile = f;
-    document.getElementById(nameId).textContent = f.name;
-    card.classList.add('ready');
-    resetComparisonState();
-    checkBothUploaded();
-  });
-
-  card.addEventListener('dragover', e => { e.preventDefault(); card.classList.add('dragover'); });
-  card.addEventListener('dragleave', () => card.classList.remove('dragover'));
-  card.addEventListener('drop', e => {
-    e.preventDefault();
-    card.classList.remove('dragover');
-    const f = e.dataTransfer.files[0];
-    if (!f) return;
-    const dt = new DataTransfer();
-    dt.items.add(f);
-    input.files = dt.files;
-    input.dispatchEvent(new Event('change'));
-  });
-}
-
-setupPicker('adminFile',   'adminCard',   'adminFname',   'adminReady',   'admin');
-setupPicker('suvidhaFile', 'suvidhaCard', 'suvidhaFname', 'suvidhaReady', 'suvidha');
-
-// ── helpers ───────────────────────────────────────────────────────────────────
-function esc(s) {
-  return String(s)
+function esc(value) {
+  return String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
-function getHeaderParams() {
-  return {
-    admin_header_row: '2',
-    admin_header_span: '3',
-    suvidha_header_row: '1',
-    suvidha_header_span: '2',
-  };
-}
 
-function getDateMode() {
-  return 'auto';
-}
-
-function getPageSize() {
-  return Number(document.getElementById('pageSize').value || currentPageSize || 200);
-}
-
-function hasValidHeaderValue(id) {
-  const value = document.getElementById(id).value;
-  return value === '' || /^\d+$/.test(String(value));
-}
-
-function collectManualMappings() {
-  const mapping = {};
-  document.querySelectorAll('#mappingConflictList [data-admin-col]').forEach(row => {
-    const adminCol = row.dataset.adminCol;
-    const select = row.querySelector('select');
-    if (select && select.value) {
-      mapping[adminCol] = select.value;
-    }
-  });
-  return mapping;
-}
-
-function clearMappingConflicts() {
-  mappingConflicts = [];
-  manualMappings = {};
-  const panel = document.getElementById('mappingConflicts');
-  const list = document.getElementById('mappingConflictList');
-  if (panel) panel.classList.remove('show');
-  if (list) list.innerHTML = '';
-}
-
-function renderMappingConflicts(conflicts) {
-  const panel = document.getElementById('mappingConflicts');
-  const list = document.getElementById('mappingConflictList');
-  mappingConflicts = [];
-  manualMappings = {};
-  if (panel) panel.classList.remove('show');
-  if (list) list.innerHTML = '';
-}
-
-function validateBeforeApiCall(requireMappings = false) {
-  clearErr();
-  if (!adminFile || !suvidhaFile) {
-    showErr('Upload both Admin and Suvidha files first.');
-    return false;
-  }
-  return true;
-}
-
-function buildRequestForm(view, page, pageSize) {
-  const fd = new FormData();
-  fd.append('admin_file', adminFile);
-  fd.append('suvidha_file', suvidhaFile);
-  fd.append('admin_key', document.getElementById('adminKey').value);
-  fd.append('suvidha_key', document.getElementById('suvidhaKey').value);
-  fd.append('date_mode', getDateMode());
-  fd.append('view', view);
-  fd.append('page', String(page));
-  fd.append('page_size', String(pageSize));
-  fd.append('manual_mappings', JSON.stringify(collectManualMappings()));
-  appendUploadParams(fd);
-  return fd;
-}
-
-function resetPaginationState() {
-  currentPagination = null;
-  currentPage = 1;
-  currentView = 'disc';
-  currentData = [];
-  const bar = document.getElementById('paginationBar');
-  if (bar) {
-    bar.classList.remove('show');
-    bar.innerHTML = '';
-  }
-}
-
-function resetComparisonState() {
-  lastResult = null;
-  columnsLoaded = false;
-  resetPaginationState();
-  document.getElementById('results').classList.remove('show');
-  document.getElementById('statsBar').classList.remove('show');
-  document.getElementById('tabContent').innerHTML = '';
-  document.getElementById('sTotal').textContent = '0';
-  document.getElementById('sMatch').textContent = '0';
-  document.getElementById('sDisc').textContent = '0';
-  document.getElementById('sOA').textContent = '0';
-  document.getElementById('sOS').textContent = '0';
-  document.getElementById('tDisc').textContent = '0';
-  document.getElementById('tOA').textContent = '0';
-  document.getElementById('tOS').textContent = '0';
-  document.getElementById('submitBtn').disabled = true;
-  document.getElementById('dlBtn').disabled = true;
-  clearMappingConflicts();
-}
-
-function appendUploadParams(fd) {
-  const p = getHeaderParams();
-  fd.append('admin_header_row', p.admin_header_row);
-  fd.append('admin_header_span', p.admin_header_span);
-  fd.append('suvidha_header_row', p.suvidha_header_row);
-  fd.append('suvidha_header_span', p.suvidha_header_span);
-}
-
-async function postForm(url, fd, controller) {
-  await csrfReady;
-  const activeController = controller || new AbortController();
-  if (activeController.signal && activeController.signal.aborted) {
-    throw new DOMException('Aborted', 'AbortError');
-  }
-  activeController.__timedOut = false;
-  const timeoutId = REQUEST_TIMEOUT_MS > 0 ? setTimeout(() => {
-    activeController.__timedOut = true;
-    activeController.abort();
-  }, REQUEST_TIMEOUT_MS) : null;
-  return fetch(url, {
-    method: 'POST',
-    body: fd,
-    signal: activeController.signal,
-    headers: { 'X-Grambook-CSRF': csrfToken },
-  }).finally(() => {
-    if (timeoutId) clearTimeout(timeoutId);
-  });
-}
-
-function setBusy(on) {
-  fetching = on;
-  const btn = document.getElementById('submitBtn');
-  const dl = document.getElementById('dlBtn');
-  btn.disabled = on;
-  if (dl) dl.disabled = on;
-  document.getElementById('adminKey').disabled = on;
-  document.getElementById('suvidhaKey').disabled = on;
-  document.getElementById('adminHeaderRow').disabled = on;
-  document.getElementById('adminHeaderSpan').disabled = on;
-  document.getElementById('suvidhaHeaderRow').disabled = on;
-  document.getElementById('suvidhaHeaderSpan').disabled = on;
-  document.getElementById('dateMode').disabled = on;
-  document.getElementById('pageSize').disabled = on;
-  document.getElementById('btnTxt').textContent = on ? 'Comparing…' : 'Compare Files';
-  document.getElementById('btnIco').innerHTML   = on ? '<span class="spin"></span>' : '→';
-}
-
-function showErr(msg) {
-  const b = document.getElementById('errBanner');
-  b.textContent = '⚠  ' + msg;
-  b.classList.add('show');
+function showErr(message) {
+  const el = document.getElementById('errBanner');
+  el.textContent = message;
+  el.classList.add('show');
 }
 
 function clearErr() {
   document.getElementById('errBanner').classList.remove('show');
 }
 
-// ── live preview ──────────────────────────────────────────────────────────────
-function fetchPreview(which) {
-  const reqId = ++previewReqSeq[which];
-  if (previewAbort[which]) previewAbort[which].abort();
-  const controller = new AbortController();
-  previewAbort[which] = controller;
-  const file    = which === 'admin' ? adminFile : suvidhaFile;
-  const hrParam = which === 'admin' ? 'adminHeaderRow'  : 'suvidhaHeaderRow';
-  const hsParam = which === 'admin' ? 'adminHeaderSpan' : 'suvidhaHeaderSpan';
-  const loadEl  = document.getElementById(`${which}PreviewLoading`);
-  const metaEl  = document.getElementById(`${which}PreviewMeta`);
-  const tblEl   = document.getElementById(`${which}PreviewTbl`);
-  const countEl = document.getElementById(`${which}RowCount`);
-
-  loadEl.style.display = 'flex';
-  metaEl.style.display = 'none';
-  tblEl.style.display  = 'none';
-  countEl.textContent  = '—';
-
-  const fd = new FormData();
-  fd.append('file',        file);
-  fd.append('role',        which);
-  fd.append('header_row',  document.getElementById(hrParam).value);
-  fd.append('header_span', document.getElementById(hsParam).value);
-
-  postForm('/api/header-preview', fd, controller)
-    .then(r => r.json())
-    .then(data => {
-      if (reqId !== previewReqSeq[which]) return;
-      loadEl.style.display = 'none';
-      if (data.error) {
-        tblEl.style.display = 'block';
-        tblEl.innerHTML = `<div class="preview-loading" style="color:var(--warn)">⚠ ${esc(data.error)}</div>`;
-        return;
-      }
-      previewData[which] = data;
-      const rowCount = (data.sample_rows || []).length;
-      countEl.textContent = `${rowCount} rows`;
-
-      const notes = (data.notes || []).join(' · ') || 'No issues detected';
-      metaEl.style.display = 'flex';
-      metaEl.innerHTML = `
-        <div class="preview-meta-item">
-          <span class="preview-meta-dot ${which}"></span>
-          Header at row ${data.header_row}, span ${data.header_span}
-        </div>
-        <div class="preview-meta-item" style="color:var(--muted);font-size:.65rem">${esc(notes)}</div>`;
-
-      if (!data.columns || !data.columns.length) {
-        tblEl.style.display = 'block';
-        tblEl.innerHTML = '<div class="preview-loading">No columns detected.</div>';
-        return;
-      }
-
-      const rowClass = which === 'admin' ? 'admin-preview' : 'suvidha-preview';
-      const thBg    = which === 'admin' ? 'rgba(181,69,27,.08)' : 'rgba(26,107,74,.08)';
-      const thColor = which === 'admin' ? 'var(--admin-h)' : 'var(--suv-h)';
-      const thStyle = `background:${thBg};color:${thColor};font-family:'DM Mono',monospace;font-size:.63rem;text-transform:uppercase;letter-spacing:.07em;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap`;
-      const tdStyle = `padding:9px 12px;border-bottom:1px solid var(--border);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`;
-
-      let html = `<table><thead><tr><th style="${thStyle};color:var(--muted)">#</th>`;
-      data.columns.forEach(col => {
-        html += `<th style="${thStyle}">${esc(col)}</th>`;
-      });
-      html += `</tr></thead><tbody>`;
-      (data.sample_rows || []).forEach((row, idx) => {
-        html += `<tr class="${rowClass}"><td style="${tdStyle};color:var(--muted);font-family:'DM Mono',monospace;font-size:.67rem">${idx + 1}</td>`;
-        data.columns.forEach(col => {
-          const val = String(row[col] ?? '');
-          html += `<td style="${tdStyle}" title="${esc(val)}">${esc(val)}</td>`;
-        });
-        html += `</tr>`;
-      });
-      html += `</tbody></table>`;
-      tblEl.style.display = 'block';
-      tblEl.innerHTML = html;
-    })
-    .catch(e => {
-      if (e.name === 'AbortError') {
-        if (controller.__timedOut) {
-          loadEl.style.display = 'none';
-          tblEl.style.display = 'block';
-          tblEl.innerHTML = `<div class="preview-loading" style="color:var(--warn)">⚠ Preview timed out.</div>`;
-        }
-        return;
-      }
-      if (reqId !== previewReqSeq[which]) return;
-      loadEl.style.display = 'none';
-      tblEl.style.display  = 'block';
-      tblEl.innerHTML = `<div class="preview-loading" style="color:var(--warn)">⚠ Could not load preview: ${esc(String(e))}</div>`;
-    });
+function columnLabel(index) {
+  let n = index + 1;
+  let label = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    label = String.fromCharCode(65 + rem) + label;
+    n = Math.floor((n - 1) / 26);
+  }
+  return label;
 }
 
-// ── preview tab switching ─────────────────────────────────────────────────────
-document.querySelectorAll('.preview-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    const which = tab.dataset.preview;
-    document.querySelectorAll('.preview-tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('adminPreviewPane').classList.toggle('active',   which === 'admin');
-    document.getElementById('suvidhaPreviewPane').classList.toggle('active', which === 'suvidha');
+function populateColumns() {
+  const sel = document.getElementById('idColumn');
+  let html = '<option value="" selected disabled>Select a column</option>';
+  for (let i = 0; i < 50; i += 1) {
+    html += `<option value="${i}">Column ${columnLabel(i)} (${i + 1})</option>`;
+  }
+  sel.innerHTML = html;
+  sel.value = '0';
+}
+
+function updateButtons() {
+  const hasFiles = !!adminFile && !!suvidhaFile;
+  const hasColumn = document.getElementById('idColumn').value !== '';
+  document.getElementById('compareBtn').disabled = !(hasFiles && hasColumn);
+  document.getElementById('downloadBtn').disabled = !lastResult;
+}
+
+function setFile(input, targetName, setter) {
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    setter(file);
+    document.getElementById(targetName).textContent = file.name;
+    clearErr();
+    updateButtons();
   });
-});
-
-// ── column fetch (triggered when both files ready) ────────────────────────────
-function checkBothUploaded() {
-  const reqId = ++columnsReqSeq;
-  if (columnsAbort) columnsAbort.abort();
-  columnsAbort = new AbortController();
-  if (!adminFile || !suvidhaFile) return;
-  const fd = new FormData();
-  fd.append('admin_file',        adminFile);
-  fd.append('suvidha_file',      suvidhaFile);
-  appendUploadParams(fd);
-
-  postForm('/api/columns', fd, columnsAbort)
-    .then(r => r.json())
-    .then(data => {
-      if (reqId !== columnsReqSeq) return;
-      if (data.error) { showErr(data.error); return; }
-      columnsLoaded = true;
-      currentPageSize = getPageSize();
-      populateSel('adminKey',   data.admin_cols, ['id','no','num','code','ref','adm'], data.admin_col_meta || [], data.suggested_keys?.admin || '');
-      populateSel('suvidhaKey', data.suv_cols,   ['admin','id','no','num','code','ref'], data.suv_col_meta || [], data.suggested_keys?.suvidha || '');
-      renderMappingConflicts([]);
-      document.getElementById('mapPanel').classList.add('show');
-      validateSubmit();
-      document.getElementById('previewBlock').style.display = 'block';
-      fetchPreview('admin');
-      fetchPreview('suvidha');
-    })
-    .catch(e => {
-        if (e.name === 'AbortError') {
-          if (columnsAbort && columnsAbort.__timedOut) {
-            showErr('Loading columns timed out. Please try again.');
-          }
-          return;
-        }
-        if (reqId !== columnsReqSeq) return;
-        showErr('Could not read columns: ' + e);
-        document.getElementById('submitBtn').disabled = true;
-    });
 }
 
-function validateSubmit() {
-  const btn = document.getElementById('submitBtn');
-  btn.disabled = !(adminFile && suvidhaFile && !fetching);
+setFile(document.getElementById('adminFile'), 'adminName', file => { adminFile = file; });
+setFile(document.getElementById('suvidhaFile'), 'suvidhaName', file => { suvidhaFile = file; });
+populateColumns();
+
+document.getElementById('idColumn').addEventListener('change', updateButtons);
+
+async function postForm(url, formData) {
+  await csrfReady;
+  const response = await fetch(url, {
+    method: 'POST',
+    body: formData,
+    headers: { 'X-Grambook-CSRF': csrfToken },
+  });
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  const data = contentType.includes('application/json') ? await response.json() : { error: await response.text() };
+  if (!response.ok || data.error) {
+    throw new Error(data.error || 'Request failed');
+  }
+  return data;
 }
 
-function renderPaginationControls(pagination) {
-  const bar = document.getElementById('paginationBar');
-  if (!bar) return;
-  currentPagination = pagination || null;
-  if (!pagination || !pagination.total_pages || pagination.total_pages <= 1) {
-    bar.classList.remove('show');
-    bar.innerHTML = '';
+function renderRows(rows) {
+  if (!rows || !rows.length) {
+    return '<div class="empty">No records</div>';
+  }
+  const width = rows.reduce((max, row) => Math.max(max, row.length || 0), 0);
+  const headers = Array.from({ length: width }, (_, i) => `Column ${columnLabel(i)}`);
+  let html = '<div class="table-wrap"><table><thead><tr><th>ID</th><th>Row #</th>';
+  headers.forEach(h => { html += `<th>${esc(h)}</th>`; });
+  html += '</tr></thead><tbody>';
+  rows.forEach(item => {
+    const row = item.row || item.admin || item.suvidha || [];
+    html += `<tr><td>${esc(item.id || '')}</td><td>${esc(item.row_number || '')}</td>`;
+    for (let i = 0; i < width; i += 1) {
+      const val = row[i] ?? '';
+      html += `<td>${esc(val)}</td>`;
+    }
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function renderMismatches(rows) {
+  if (!rows || !rows.length) {
+    return '<div class="empty"><span class="badge good">OK</span> No mismatches found.</div>';
+  }
+  let html = '';
+  rows.forEach((item, idx) => {
+    const adminRow = item.admin || [];
+    const suvRow = item.suvidha || [];
+    const width = Math.max(adminRow.length, suvRow.length);
+    const diff = new Set(item.diff_columns || []);
+    html += `<div class="card" style="margin-bottom:12px;">`;
+    html += `<strong>#{idx + 1} ID: ${esc(item.id || '')}</strong>`;
+    html += `<div class="table-wrap" style="margin-top:10px;"><table><thead><tr><th>Source</th>`;
+    for (let i = 0; i < width; i += 1) {
+      html += `<th>Column ${columnLabel(i)}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+    html += `<tr><td class="badge warn">Admin</td>`;
+    for (let i = 0; i < width; i += 1) {
+      const val = adminRow[i] ?? '';
+      html += `<td class="${diff.has(i) ? 'diff-cell' : ''}">${esc(val)}</td>`;
+    }
+    html += '</tr>';
+    html += `<tr><td class="badge warn">Suvidha</td>`;
+    for (let i = 0; i < width; i += 1) {
+      const val = suvRow[i] ?? '';
+      html += `<td class="${diff.has(i) ? 'diff-cell' : ''}">${esc(val)}</td>`;
+    }
+    html += '</tr></tbody></table></div></div>';
+  });
+  return html;
+}
+
+async function compareFiles() {
+  if (!adminFile || !suvidhaFile) {
+    showErr('Upload both files first.');
     return;
   }
-  const totalPages = pagination.total_pages;
-  const current = pagination.current_page;
-  const mkPageBtn = (label, page, disabled = false, active = false) => {
-    const cls = active ? 'page-chip active' : 'page-chip';
-    return `<button class="${cls}" data-page="${page}" ${disabled ? 'disabled' : ''}>${label}</button>`;
-  };
-  const windowSize = 5;
-  let start = Math.max(1, current - Math.floor(windowSize / 2));
-  let end = Math.min(totalPages, start + windowSize - 1);
-  start = Math.max(1, end - windowSize + 1);
-  const pages = [];
-  if (current > 1) pages.push(`<button class="page-btn" data-page="${current - 1}">Prev</button>`);
-  if (start > 1) pages.push(mkPageBtn('1', 1));
-  if (start > 2) pages.push('<span class="page-chip">…</span>');
-  for (let p = start; p <= end; p += 1) {
-    pages.push(mkPageBtn(String(p), p, false, p === current));
-  }
-  if (end < totalPages - 1) pages.push('<span class="page-chip">…</span>');
-  if (end < totalPages) pages.push(mkPageBtn(String(totalPages), totalPages));
-  if (current < totalPages) pages.push(`<button class="page-btn" data-page="${current + 1}">Next</button>`);
-  pages.push(`<span class="page-chip">Page ${current} of ${totalPages}</span>`);
-  bar.innerHTML = pages.join('');
-  bar.classList.add('show');
-  bar.querySelectorAll('button[data-page]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const page = Number(btn.dataset.page);
-      if (!page || page === current) return;
-      setBusy(true);
-      requestPage(currentView, page)
-        .then(data => {
-          lastResult = data;
-          currentData = data.data || [];
-          currentPagination = data.pagination || null;
-          renderStats(data.stats);
-          setTab(currentView);
-          renderTab(data, currentView);
-          renderPaginationControls(data.pagination);
-          setBusy(false);
-        })
-        .catch(e => {
-          setBusy(false);
-          if (e.name === 'AbortError') return;
-          showErr('Request failed: ' + e.message);
-        });
-    });
-  });
-}
-
-async function requestPage(view, page) {
-  const pageSize = getPageSize();
-  if (compareAbort) compareAbort.abort();
-  compareAbort = new AbortController();
-  currentView = view;
-  currentPage = page;
-  const fd = buildRequestForm(view, page, pageSize);
-  try {
-    const r = await postForm('/reconcile', fd, compareAbort);
-    const ct = (r.headers.get('content-type') || '').toLowerCase();
-    if (!r.ok) {
-      const d = ct.includes('application/json') ? await r.json() : { error: await r.text() };
-      throw new Error(d.error || 'Reconciliation failed');
-    }
-    return await r.json();
-  } finally {
-    // leave busy state management to caller
-  }
-}
-
-document.getElementById('adminKey').addEventListener('change', () => {
-  if (adminFile && suvidhaFile) {
-    resetComparisonState();
-    checkBothUploaded();
-  }
-  validateSubmit();
-});
-document.getElementById('suvidhaKey').addEventListener('change', () => {
-  if (adminFile && suvidhaFile) {
-    resetComparisonState();
-    checkBothUploaded();
-  }
-  validateSubmit();
-});
-
-function populateSel(selId, cols, pref, colMeta, suggestedKey = '') {
-  const sel = document.getElementById(selId);
-  const metaByCol = {};
-  (colMeta || []).forEach(m => { if (m && m.column) metaByCol[m.column] = m; });
-  const prefList = Array.isArray(pref) ? pref.map(v => String(v).toLowerCase()) : [];
-
-  const groups = {};
-  cols.forEach(c => {
-    const m = metaByCol[c] || {};
-    const group = (m.group && m.group !== 'Other') ? m.group : 'Other';
-    if (!groups[group]) groups[group] = [];
-    const preferred = prefList.some(token => String(c).toLowerCase().includes(token));
-    groups[group].push({ value: c, label: c, preferred });
-  });
-
-  const groupNames = Object.keys(groups).sort((a, b) => {
-    if (a === 'Other') return 1;
-    if (b === 'Other') return -1;
-    return a.localeCompare(b);
-  });
-
-  let html = '<option value="" selected disabled>Select key column</option>';
-  groupNames.forEach(g => {
-    const ordered = groups[g].slice().sort((a, b) => Number(b.preferred) - Number(a.preferred) || a.label.localeCompare(b.label));
-    const opts = ordered.map((item, idx) => {
-      const label = item.label;
-      return `<option value="${esc(item.value)}">${esc(label)}</option>`;
-    }).join('');
-    html += g === 'Other' ? opts : `<optgroup label="${esc(g)}">${opts}</optgroup>`;
-  });
-
-  sel.innerHTML = html;
-  const preferredOption = groups.Other?.find(item => item.preferred)
-    || Object.values(groups).flat().find(item => item.preferred);
-  if (preferredOption) {
-    sel.value = preferredOption.value;
-  } else if (suggestedKey) {
-    sel.value = suggestedKey;
-  } else if (!sel.value && sel.options.length > 1) {
-    sel.value = sel.options[1].value;
-  }
-}
-
-// Re-fetch columns when header settings change
-['adminHeaderRow','adminHeaderSpan','suvidhaHeaderRow','suvidhaHeaderSpan'].forEach(id => {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.addEventListener('change', () => {
-    if (!adminFile || !suvidhaFile) return;
-    resetComparisonState();
-    checkBothUploaded();
-    if (id.startsWith('admin')   && adminFile)   fetchPreview('admin');
-    if (id.startsWith('suvidha') && suvidhaFile) fetchPreview('suvidha');
-  });
-});
-
-document.getElementById('dateMode').addEventListener('change', () => {
-  if (lastResult && adminFile && suvidhaFile && columnsLoaded) {
-    setBusy(true);
-    requestPage(currentView, 1)
-      .then(data => {
-        lastResult = data;
-        currentData = data.data || [];
-        currentPagination = data.pagination || null;
-        renderStats(data.stats);
-        setTab(currentView);
-        renderTab(data, currentView);
-        renderPaginationControls(data.pagination);
-        setBusy(false);
-      })
-      .catch(e => {
-        setBusy(false);
-        if (e.name === 'AbortError') return;
-        showErr('Request failed: ' + e.message);
-      });
-  }
-});
-
-document.getElementById('pageSize').addEventListener('change', () => {
-  currentPageSize = getPageSize();
-  validateSubmit();
-  if (lastResult && adminFile && suvidhaFile && columnsLoaded) {
-    setBusy(true);
-    requestPage(currentView, 1)
-      .then(data => {
-        lastResult = data;
-        currentData = data.data || [];
-        currentPagination = data.pagination || null;
-        renderStats(data.stats);
-        setTab(currentView);
-        renderTab(data, currentView);
-        renderPaginationControls(data.pagination);
-        setBusy(false);
-      })
-      .catch(e => {
-        setBusy(false);
-        if (e.name === 'AbortError') return;
-        showErr('Request failed: ' + e.message);
-      });
-  }
-});
-
-// ── submit ────────────────────────────────────────────────────────────────────
-document.getElementById('submitBtn').addEventListener('click', () => {
-  if (fetching) return;
-  if (!validateBeforeApiCall(true)) {
+  const idColumnIndex = document.getElementById('idColumn').value;
+  if (idColumnIndex === '') {
+    showErr('Select a unique ID column.');
     return;
   }
   clearErr();
-  setBusy(true);
-  requestPage('disc', 1)
-    .then(data => {
-      lastResult = data;
-      currentData = data.data || [];
-      currentView = data.view || 'disc';
-      currentPage = data.pagination?.current_page || 1;
-      currentPagination = data.pagination || null;
-      setBusy(false);
-      renderStats(data.stats);
-      activeTab = 'disc';
-      setTab('disc');
-      renderTab(data, 'disc');
-      renderPaginationControls(data.pagination);
-      document.getElementById('dlBtn').disabled = false;
-      document.getElementById('results').classList.add('show');
-      setTimeout(() => document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
-    })
-    .catch(e => {
-      setBusy(false);
-      validateSubmit();
-      document.getElementById('dlBtn').disabled = !lastResult;
-      if (e.name === 'AbortError') {
-        if (compareAbort && compareAbort.__timedOut) {
-          showErr('Comparison timed out. Please try again.');
-        }
-        return;
-      }
-      showErr('Request failed: ' + e.message);
-    });
-});
+  const formData = new FormData();
+  formData.append('admin_file', adminFile);
+  formData.append('suvidha_file', suvidhaFile);
+  formData.append('id_column_index', idColumnIndex);
+  document.getElementById('compareBtn').disabled = true;
+  try {
+    const data = await postForm('/reconcile', formData);
+    lastResult = data;
+    document.getElementById('stats').style.display = 'grid';
+    document.getElementById('results').style.display = 'block';
+    const mismatches = data.mismatches || [];
+    const adminOnly = data.admin_only || [];
+    const suvidhaOnly = data.suvidha_only || [];
+    document.getElementById('statTotal').textContent = String((data.stats && data.stats.total) || (mismatches.length + adminOnly.length + suvidhaOnly.length));
+    document.getElementById('statMismatch').textContent = String(mismatches.length);
+    document.getElementById('statOnly').textContent = String(adminOnly.length + suvidhaOnly.length);
+    document.getElementById('mismatchWrap').innerHTML = renderMismatches(mismatches);
+    document.getElementById('adminOnlyWrap').innerHTML = renderRows(adminOnly);
+    document.getElementById('suvidhaOnlyWrap').innerHTML = renderRows(suvidhaOnly);
+  } catch (err) {
+    showErr(err.message);
+  } finally {
+    updateButtons();
+  }
+}
 
-// ── download ──────────────────────────────────────────────────────────────────
-document.getElementById('dlBtn').addEventListener('click', () => {
-  if (!validateBeforeApiCall(true)) {
+document.getElementById('compareBtn').addEventListener('click', compareFiles);
+
+document.getElementById('downloadBtn').addEventListener('click', async () => {
+  if (!adminFile || !suvidhaFile || document.getElementById('idColumn').value === '') {
+    showErr('Upload both files and select a column first.');
     return;
   }
-  const dl = document.getElementById('dlBtn');
-  dl.disabled = true;
-  dl.textContent = 'Generating…';
-  if (downloadAbort) downloadAbort.abort();
-  downloadAbort = new AbortController();
-  const fd = buildRequestForm(currentView || 'disc', currentPage || 1, getPageSize());
-
-  postForm('/api/download', fd, downloadAbort)
-    .then(async r => {
-      const ct = (r.headers.get('content-type') || '').toLowerCase();
-      if (!r.ok) {
-        const d = ct.includes('application/json') ? await r.json() : { error: await r.text() };
-        throw new Error(d.error || 'Download failed');
-      }
-      if (ct.includes('application/json')) {
-        const d = await r.json();
-        throw new Error(d.error || 'Download failed');
-      }
-      return r.blob();
-    })
-    .then(blob => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const ts = new Date().toISOString().slice(0, 10);
-      a.href = url;
-      a.download = `grambook_reconciliation_${ts}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-      dl.disabled = false;
-      dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
-    })
-    .catch(e => {
-      if (e.name === 'AbortError') {
-        if (downloadAbort && downloadAbort.__timedOut) {
-          showErr('Download timed out. Please try again.');
-        }
-        dl.disabled = false;
-        dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
-        return;
-      }
-      showErr(e.message);
-      dl.disabled = false;
-      dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
+  const formData = new FormData();
+  formData.append('admin_file', adminFile);
+  formData.append('suvidha_file', suvidhaFile);
+  formData.append('id_column_index', document.getElementById('idColumn').value);
+  try {
+    const response = await fetch('/api/download', {
+      method: 'POST',
+      body: formData,
+      headers: { 'X-Grambook-CSRF': csrfToken },
     });
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+    }
+    if (!response.ok) throw new Error('Download failed');
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'grambook_reconciliation.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  } catch (err) {
+    showErr(err.message);
+  }
 });
 
-// ── result tabs ───────────────────────────────────────────────────────────────
-document.querySelectorAll('.tab').forEach(t =>
-  t.addEventListener('click', () => {
-    if (!lastResult) return;
-    const nextTab = t.dataset.tab;
-    currentView = nextTab;
-    currentPage = 1;
-    setBusy(true);
-    requestPage(nextTab, 1)
-      .then(data => {
-        lastResult = data;
-        currentData = data.data || [];
-        currentPagination = data.pagination || null;
-        setBusy(false);
-        setTab(nextTab);
-        renderTab(data, nextTab);
-        renderPaginationControls(data.pagination);
-      })
-      .catch(e => {
-        setBusy(false);
-        if (e.name === 'AbortError') return;
-        showErr('Request failed: ' + e.message);
-      });
-  })
-);
-
-function setTab(tab) {
-  activeTab = tab;
-  document.querySelectorAll('.tab').forEach(t =>
-    t.classList.toggle('active', t.dataset.tab === tab)
-  );
-}
-
-// ── render stats ──────────────────────────────────────────────────────────────
-function renderStats(s) {
-  document.getElementById('sTotal').textContent = s.total;
-  document.getElementById('sMatch').textContent = s.matched;
-  document.getElementById('sDisc').textContent  = s.mismatched ?? s.disc;
-  document.getElementById('sOA').textContent    = s.only_a;
-  document.getElementById('sOS').textContent    = s.only_s;
-  document.getElementById('tDisc').textContent  = s.mismatched ?? s.disc;
-  document.getElementById('tOA').textContent    = s.only_a;
-  document.getElementById('tOS').textContent    = s.only_s;
-  document.getElementById('statsBar').classList.add('show');
-}
-
-// ── render tab content ────────────────────────────────────────────────────────
-function renderTab(r, tab) {
-  const c = document.getElementById('tabContent');
-  const banner = (r.meta && r.meta.date_mode === 'strict')
-    ? `<div class="preview-loading" style="margin:0 0 12px;color:var(--accent)">Date mode: strict</div>`
-    : '';
-  c.innerHTML = '';
-  if (tab === 'disc') c.innerHTML = banner + renderDisc(r);
-  if (tab === 'oa')   c.innerHTML = banner + renderOnly(r.data || [], r.admin_cols, 'oa-row');
-  if (tab === 'os')   c.innerHTML = banner + renderOnly(r.data || [], r.suv_cols,   'os-row');
-}
-
-// ── discrepancies table ───────────────────────────────────────────────────────
-function renderDisc(r) {
-  const details = r.data || [];
-  if (!details.length) {
-    return `<div class="empty"><div class="ico">OK</div><strong>All clear</strong>All matched records are identical.</div>`;
-  }
-
-  const adminCols = r.admin_cols || [];
-  const unmappedAdminCols = new Set((r.unmapped && r.unmapped.admin_cols) || []);
-  const unmappedSuvCols = (r.unmapped && r.unmapped.suv_cols) || [];
-
-  // ✅ Build column map (admin → suvidha)
-  const columnMap = {};
-  (r.col_pairs || []).forEach(p => {
-    columnMap[p.admin_col] = p.suv_col;
-  });
-
-  const suvOnlyCols = [...new Set(unmappedSuvCols.map(name => `SUV::${name}`))];
-
-  const columns = [...adminCols, ...suvOnlyCols];
-
-  function getSuvValue(suvRow, col, diffs) {
-    // SUV-only column
-    if (col.startsWith('SUV::')) {
-      const raw = col.replace('SUV::', '');
-      const key = `[SUV] ${raw}`;
-      return diffs[key]?.suvidha ?? suvRow[raw] ?? '';
-    }
-
-    // mapped column
-    const mapped = columnMap[col] || col;
-    if (unmappedAdminCols.has(col)) {
-      return 'COLUMN NOT FOUND';
-    }
-
-    let val = suvRow[mapped];
-    // fallback
-    if (val === undefined || val === null || val === '') {
-      val = columnMap[col] ? (suvRow[col] ?? '') : 'COLUMN NOT FOUND';
-    }
-
-    // handle COLUMN_NOT_FOUND
-    if (val === "COLUMN NOT FOUND") {
-      return "COLUMN NOT FOUND";
-    }
-
-    return val;
-  }
-
-  let html = `<div class="tbl-outer"><table><thead><tr>
-    <th>Source</th>
-    ${columns.map(c => `<th>${esc(c)}</th>`).join('')}
-  </tr></thead><tbody>`;
-
-  details.forEach(item => {
-    const adminRow = item.admin_row || {};
-    const suvRow = item.suvidha || item.suv_row || {};
-    const diffs = item.diffs || {};
-    const rowCount = item.count || 1;
-
-    // build diff set
-    const diffSet = new Set([...(item.diff_cols || []), ...(item.suv_diff_cols || [])]);
-
-    // ── ADMIN ROW ──
-    html += `<tr class="a-row">
-      <td><span class="badge-src a">Admin${rowCount > 1 ? ` x${rowCount}` : ''}</span></td>
-      ${columns.map(col => {
-        const isDiff = diffSet.has(col) || unmappedAdminCols.has(col);
-
-        let val;
-        if (col.startsWith('SUV::')) {
-          const raw = col.replace('SUV::', '');
-          const key = `[SUV] ${raw}`;
-          val = 'COLUMN NOT FOUND';
-        } else {
-          val = adminRow[col] ?? '';
-        }
-
-        return `<td class="${isDiff ? 'diff' : ''}">${esc(val)}</td>`;
-      }).join('')}
-    </tr>`;
-
-    // ── SUVIDHA ROW (FIXED 🔥) ──
-    html += `<tr class="s-row">
-      <td><span class="badge-src s">Suvidha${rowCount > 1 ? ` x${rowCount}` : ''}</span></td>
-      ${columns.map(col => {
-        const isDiff = diffSet.has(col) || unmappedAdminCols.has(col);
-        const val = getSuvValue(suvRow, col, diffs);
-        return `<td class="${isDiff ? 'diff' : ''}">${esc(val)}</td>`;
-      }).join('')}
-    </tr>`;
-
-    html += `<tr class="sep"><td colspan="${columns.length + 1}"></td></tr>`;
-  });
-
-  html += `</tbody></table></div>`;
-  return html;
-}
-// -- only-in-one table ─────────────────────────────────────────────────────────
-function renderOnly(rows, cols, rowCls) {
-  if (!rows || !rows.length) {
-    return `<div class="empty"><div class="ico">✅</div><strong>All clear</strong>No exclusive records found.</div>`;
-  }
-  let h = `<div class="tbl-outer"><table><thead><tr>
-    ${cols.map(c => `<th>${esc(c)}</th>`).join('')}
-  </tr></thead><tbody>`;
-  rows.forEach(row => {
-    h += `<tr class="${rowCls}">${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`;
-  });
-  return h + '</tbody></table></div>';
-}
+updateButtons();
 </script>
 </body>
 </html>
-
