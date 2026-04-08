@@ -39,18 +39,18 @@ except Exception:  # pragma: no cover
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+TMP_DIR = Path(tempfile.gettempdir()) / "grambook_app"
+TMP_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 _secret_key = os.environ.get("GRAMBOOK_SECRET_KEY")
 if not _secret_key:
-    if os.environ.get("FLASK_ENV") == "production":
-        raise RuntimeError(
-            "GRAMBOOK_SECRET_KEY environment variable must be set in production."
-        )
-    _secret_key = "grambook-development-secret-key"
+    _secret_key = os.environ.get(
+        "GRAMBOOK_SECRET_KEY_FALLBACK", "grambook-serverless-secret-key"
+    )
     warnings.warn(
-        "GRAMBOOK_SECRET_KEY is not set. Set it via environment variable before deploying.",
+        "GRAMBOOK_SECRET_KEY is not set. Using a fallback key; set the env var in production.",
         stacklevel=1,
     )
 app.config["SECRET_KEY"] = _secret_key
@@ -65,8 +65,10 @@ RESULT_CACHE_TTL_SECONDS = int(
     os.environ.get("GRAMBOOK_RESULT_CACHE_TTL_SECONDS", "3600")
 )
 RESULT_CACHE_LOCK = threading.RLock()
-RESULT_CACHE_DIR = BASE_DIR / ".grambook_cache"
-RESULT_CACHE_DIR.mkdir(exist_ok=True)
+RESULT_CACHE_ENABLED = os.environ.get("GRAMBOOK_ENABLE_DISK_CACHE", "0") == "1"
+RESULT_CACHE_DIR = TMP_DIR / "cache"
+if RESULT_CACHE_ENABLED:
+    RESULT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_SESSION_KEY = "grambook_session_id"
 CSRF_SESSION_KEY = "grambook_csrf_token"
 CSRF_RATE_LIMIT_KEY = "grambook_csrf_rate_limit"
@@ -422,6 +424,8 @@ def _cache_result(cache_key: str, result: dict[str, Any]) -> None:
         while len(RESULT_CACHE_ORDER) > RESULT_CACHE_LIMIT:
             old_key = RESULT_CACHE_ORDER.pop(0)
             RESULT_CACHE.pop(old_key, None)
+    if not RESULT_CACHE_ENABLED:
+        return
     try:
         cache_path = RESULT_CACHE_DIR / f"{cache_key}.json"
         tmp_path = cache_path.with_suffix(".tmp")
@@ -441,6 +445,8 @@ def _cache_result(cache_key: str, result: dict[str, Any]) -> None:
 
 
 def _prune_disk_cache() -> None:
+    if not RESULT_CACHE_ENABLED:
+        return
     global LAST_DISK_PRUNE_AT
     now = time.time()
     with RESULT_CACHE_LOCK:
@@ -483,6 +489,9 @@ def _lookup_cached_result(cache_key: str) -> dict[str, Any] | None:
             if "result" in result and "cached_at" in result:
                 return result["result"]
             return result
+
+    if not RESULT_CACHE_ENABLED:
+        return None
 
     cache_path = _cache_path(cache_key)
     if not cache_path.exists():
