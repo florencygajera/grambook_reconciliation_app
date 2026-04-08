@@ -742,6 +742,17 @@ def _parse_optional_int(value: str | None) -> int | None:
     return num
 
 
+def _parse_column_index(value: str | None) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if not re.fullmatch(r"\d+", text):
+        raise ReconciliationError("Column index must be a non-negative integer.")
+    return int(text)
+
+
 def _parse_manual_mappings(value: str | None) -> dict[str, str]:
     if not value:
         return {}
@@ -811,14 +822,7 @@ def _parse_date_mode(value: str | None) -> str:
 def _request_fingerprint(
     admin_upload,
     suv_upload,
-    admin_header_row: int | None,
-    admin_header_span: int | None,
-    suv_header_row: int | None,
-    suv_header_span: int | None,
-    admin_key: str | None,
-    suv_key: str | None,
-    date_mode: str | None = None,
-    manual_mappings_raw: str | None = None,
+    *parts: Any,
 ) -> str:
     admin_bytes, admin_name = _file_bytes(admin_upload)
     suv_bytes, suv_name = _file_bytes(suv_upload)
@@ -827,14 +831,7 @@ def _request_fingerprint(
         "suv": hashlib.sha256(suv_bytes).hexdigest(),
         "admin_name": admin_name,
         "suv_name": suv_name,
-        "admin_header_row": admin_header_row,
-        "admin_header_span": admin_header_span,
-        "suv_header_row": suv_header_row,
-        "suv_header_span": suv_header_span,
-        "admin_key": _clean_text(admin_key),
-        "suv_key": _clean_text(suv_key),
-        "date_mode": _clean_text(date_mode),
-        "manual_mappings": manual_mappings_raw or "",
+        "parts": [str(part) for part in parts],
         "session_id": _session_scope_id(),
         "time_bucket": int(time.time() // 3600),
     }
@@ -1067,7 +1064,6 @@ def _build_column_mapping(
     suv_used: set[str] = set()
     mapping: dict[str, str] = {}
     pairs: list[dict[str, Any]] = []
-    conflicts: list[dict[str, Any]] = []
 
     admin_norm_map = {col: _normalize_header_compact(col) for col in admin.columns}
     suv_norm_map = {col: _normalize_header_compact(col) for col in suv.columns}
@@ -1254,6 +1250,15 @@ def normalize_key(value: Any) -> str:
     return v or "0"
 
 
+def normalize_value(value: Any) -> str:
+    if value is None:
+        return "0"
+    v = str(value).strip()
+    if v == "":
+        return "0"
+    return v
+
+
 def _normalize_key_value(value: Any) -> str:
     return normalize_key(value)
 
@@ -1326,7 +1331,7 @@ def _compare_pair(
     suv: ParsedDataset,
     column_map: dict[str, str],
     date_mode: str = "auto",
-~    unmapped_suv: list[str] | None = None,
+    unmapped_suv: list[str] | None = None,
 ) -> dict[str, Any] | None:
     unmapped_suv = unmapped_suv or []
     admin_vals = [admin_rec.norm_row.get(col, "") for col in admin.columns]
@@ -1354,19 +1359,99 @@ def _compare_pair(
         }
         diff_cols.append(admin_col)
 
-        return {
-            "key": suv_rec.key_display or admin_rec.key_display,
-            "key_norm": admin_rec.key_norm or suv_rec.key_norm,
-            "admin_row_number": admin_rec.row_number,
-            "suvidha_row_number": suv_rec.row_number,
-            "admin_row": admin_rec.row,
-            "suvidha": suv_rec.row,
-            "suv_row": suv_rec.row,
-            "diffs": diffs,
-            "diff_cols": diff_cols,
-            "suv_diff_cols": [f"SUV::{col}" for col in unmapped_suv],
-            "key_missing": admin_rec.key_missing or suv_rec.key_missing,
-        }
+    if not diffs:
+        return None
+
+    return {
+        "key": suv_rec.key_display or admin_rec.key_display,
+        "key_norm": admin_rec.key_norm or suv_rec.key_norm,
+        "admin_row_number": admin_rec.row_number,
+        "suvidha_row_number": suv_rec.row_number,
+        "admin_row": admin_rec.row,
+        "suvidha": suv_rec.row,
+        "suv_row": suv_rec.row,
+        "diffs": diffs,
+        "diff_cols": diff_cols,
+        "suv_diff_cols": [f"SUV::{col}" for col in unmapped_suv],
+        "key_missing": admin_rec.key_missing or suv_rec.key_missing,
+    }
+
+
+def reconcile_raw(
+    admin_rows: list[list[str]],
+    suv_rows: list[list[str]],
+    id_column_index: int,
+) -> dict[str, Any]:
+    id_index = max(0, int(id_column_index or 0))
+
+    def _row_key(row: list[str]) -> str:
+        if id_index >= len(row):
+            return ""
+        return _clean_text(row[id_index]).strip()
+
+    admin_map: dict[str, dict[str, Any]] = {}
+    suv_map: dict[str, dict[str, Any]] = {}
+
+    for idx, row in enumerate(admin_rows, start=1):
+        key = _row_key(row)
+        if key:
+            admin_map[key] = {"row": row, "row_number": idx}
+
+    for idx, row in enumerate(suv_rows, start=1):
+        key = _row_key(row)
+        if key:
+            suv_map[key] = {"row": row, "row_number": idx}
+
+    all_keys = sorted(set(admin_map.keys()) | set(suv_map.keys()))
+    mismatches: list[dict[str, Any]] = []
+    admin_only: list[dict[str, Any]] = []
+    suvidha_only: list[dict[str, Any]] = []
+
+    for key in all_keys:
+        a = admin_map.get(key)
+        b = suv_map.get(key)
+        if a and b:
+            a_row = a["row"]
+            b_row = b["row"]
+            diff_cols: list[int] = []
+            for i in range(min(len(a_row), len(b_row))):
+                v1 = normalize_value(a_row[i])
+                v2 = normalize_value(b_row[i])
+                if v1 != v2:
+                    diff_cols.append(i)
+            if diff_cols:
+                mismatches.append(
+                    {
+                        "id": key,
+                        "diff_columns": diff_cols,
+                        "admin": a_row,
+                        "suvidha": b_row,
+                        "admin_row_number": a["row_number"],
+                        "suvidha_row_number": b["row_number"],
+                    }
+                )
+        elif a:
+            admin_only.append({"id": key, "row": a["row"], "row_number": a["row_number"]})
+        elif b:
+            suvidha_only.append({"id": key, "row": b["row"], "row_number": b["row_number"]})
+
+    return {
+        "mismatches": mismatches,
+        "admin_only": admin_only,
+        "suvidha_only": suvidha_only,
+        "stats": {
+            "total": len(all_keys),
+            "mismatched": len(mismatches),
+            "only_a": len(admin_only),
+            "only_s": len(suvidha_only),
+            "matched": len(all_keys) - len(mismatches) - len(admin_only) - len(suvidha_only),
+        },
+        "meta": {
+            "id_column_index": id_index,
+            "comparison_mode": "column_position",
+        },
+    }
+
 
 def reconcile(
     admin: ParsedDataset,
@@ -1607,6 +1692,14 @@ def generate_discrepancy_report(
     suv: ParsedDataset,
     result: dict[str, Any],
 ) -> tempfile.SpooledTemporaryFile:
+    def normalize_export_value(v: Any) -> str:
+        if v is None:
+            return "0"
+        v = str(v).strip()
+        if v == "":
+            return "0"
+        return v
+
     styles = _excel_styles()
     wb = Workbook(write_only=True)
 
@@ -1623,274 +1716,117 @@ def generate_discrepancy_report(
             cell.border = border
         return cell
 
-    ws_summary = wb.create_sheet("Summary")
-    summary_rows = [
-        ("Grambook Reconciliation Report", ""),
-        ("Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-        ("Admin Key", result.get("admin_key", "")),
-        ("Suvidha Key", result.get("suv_key", "")),
-        ("Total Rows", result["stats"]["total"]),
-        ("Total Groups", result["stats"].get("groups", "")),
-        ("Matched", result["stats"]["matched"]),
-        ("Mismatched", result["stats"]["mismatched"]),
-        ("Only in Admin", result["stats"]["only_a"]),
-        ("Only in Suvidha", result["stats"]["only_s"]),
-        ("Missing Admin Keys", result["stats"].get("missing_admin_keys", "")),
-        ("Missing Suvidha Keys", result["stats"].get("missing_suv_keys", "")),
-        (
-            "Mapping Confidence",
-            result.get("meta", {})
-            .get("mapping_quality", {})
-            .get("weighted_confidence", ""),
-        ),
-    ]
-    ws_summary.append(
-        [
-            _wo_cell(
-                ws_summary,
-                summary_rows[0][0],
-                fill=styles["header_fill"],
-                font=styles["header_font"],
-                border=styles["border"],
-            ),
-            _wo_cell(
-                ws_summary,
-                summary_rows[0][1],
-                fill=styles["header_fill"],
-                font=styles["header_font"],
-                border=styles["border"],
-            ),
-        ]
-    )
-    for label, value in summary_rows[1:]:
-        ws_summary.append(
+    def _row_list(item: dict[str, Any], side: str, cols: list[str]) -> list[Any]:
+        value = item.get(side)
+        if isinstance(value, list):
+            return list(value)
+        if isinstance(value, dict):
+            return [value.get(col, "") for col in cols]
+        alt = item.get(f"{side}_row")
+        if isinstance(alt, dict):
+            return [alt.get(col, "") for col in cols]
+        if isinstance(alt, list):
+            return list(alt)
+        return []
+
+    items = list(result.get("mismatches", result.get("discrepancies", [])))
+    ws = wb.create_sheet("Mismatches")
+    if not items:
+        ws.append(
             [
                 _wo_cell(
-                    ws_summary,
-                    label,
-                    font=styles["bold_font"],
-                    fill=styles["admin_fill"],
+                    ws,
+                    "No mismatches found",
+                    fill=styles["header_fill"],
+                    font=styles["header_font"],
                     border=styles["border"],
-                ),
-                _wo_cell(ws_summary, value, border=styles["border"]),
+                )
             ]
         )
+        buf = tempfile.SpooledTemporaryFile(max_size=10 * 1024 * 1024, mode="w+b")
+        wb.save(buf)
+        buf.seek(0)
+        return buf
 
-    admin_cols = admin.columns
-    suv_cols = suv.columns
-    suv_lookup = {
-        pair["admin_col"]: pair["suv_col"] for pair in result.get("col_pairs", [])
-    }
+    max_width = 0
+    for item in items:
+        max_width = max(
+            max_width,
+            len(_row_list(item, "admin", admin.columns)),
+            len(_row_list(item, "suvidha", suv.columns)),
+        )
+    headers = [f"Column {i + 1}" for i in range(max_width)]
 
-    ws_disc = wb.create_sheet("Discrepancies")
-    report_columns = ["Source", "Key", "Row #"] + admin_cols
-    extra_suv_cols = [col for col in suv_cols if col not in suv_lookup.values()]
-    report_columns.extend([f"SUV::{col}" for col in extra_suv_cols])
-
-    ws_disc.append(
+    ws.append(
         [
             _wo_cell(
-                ws_disc,
-                col,
+                ws,
+                "TYPE",
                 fill=styles["header_fill"],
                 font=styles["header_font"],
                 align="center",
                 wrap=True,
                 border=styles["border"],
-            )
-            for col in report_columns
+            ),
+            *[
+                _wo_cell(
+                    ws,
+                    col,
+                    fill=styles["header_fill"],
+                    font=styles["header_font"],
+                    align="center",
+                    wrap=True,
+                    border=styles["border"],
+                )
+                for col in headers
+            ],
         ]
     )
-    for item in result.get("discrepancies", []):
-        admin_row = item.get("admin_row", {})
-        suv_row = item.get("suvidha", {})
-        diffs = item.get("diffs", {})
-        diff_cols = set(item.get("diff_cols", []))
-        count = int(item.get("count", 1) or 1)
-        source_label = "Admin" if count <= 1 else f"Admin x{count}"
-        suv_label = "Suvidha" if count <= 1 else f"Suvidha x{count}"
 
-        admin_cells = [
-            _wo_cell(
-                ws_disc,
-                source_label,
-                fill=styles["admin_fill"],
-                font=styles["admin_font"],
-                border=styles["border"],
-            ),
-            _wo_cell(
-                ws_disc,
-                item.get("key", ""),
-                fill=styles["admin_fill"],
-                border=styles["border"],
-            ),
-            _wo_cell(
-                ws_disc,
-                item.get("admin_row_number", ""),
-                fill=styles["admin_fill"],
-                border=styles["border"],
-            ),
+    for item in items:
+        admin_row = _row_list(item, "admin", admin.columns)
+        suv_row = _row_list(item, "suvidha", suv.columns)
+        width = max(len(admin_row), len(suv_row), max_width)
+        diff_cols = [
+            idx
+            for idx in range(width)
+            if normalize_export_value(admin_row[idx] if idx < len(admin_row) else "")
+            != normalize_export_value(suv_row[idx] if idx < len(suv_row) else "")
         ]
-        for col in admin_cols:
-            value = admin_row.get(col, "")
-            suv_col = suv_lookup.get(col)
-            if col in diff_cols or suv_col is None:
-                admin_cells.append(
-                    _wo_cell(
-                        ws_disc,
-                        value,
-                        fill=styles["mismatch_fill_admin"],
-                        font=styles["bold_font"],
-                        border=styles["border"],
-                        wrap=True,
-                    )
-                )
-            else:
-                admin_cells.append(
-                    _wo_cell(
-                        ws_disc,
-                        value,
-                        fill=styles["admin_fill"],
-                        border=styles["border"],
-                        wrap=True,
-                    )
-                )
-        for col in extra_suv_cols:
-            label = f"[SUV] {col}"
-            value = diffs.get(label, {}).get("suvidha", suv_row.get(col, ""))
-            admin_cells.append(
-                _wo_cell(
-                    ws_disc,
-                    "VALUE_MISSING" if value == VALUE_MISSING else value,
-                    fill=styles["mismatch_fill_admin"],
-                    font=styles["bold_font"],
-                    border=styles["border"],
-                    wrap=True,
-                )
-            )
-        ws_disc.append(admin_cells)
 
-        suv_cells = [
-            _wo_cell(
-                ws_disc,
-                suv_label,
-                fill=styles["suv_fill"],
-                font=styles["suv_font"],
-                border=styles["border"],
-            ),
-            _wo_cell(
-                ws_disc,
-                item.get("key", ""),
-                fill=styles["suv_fill"],
-                border=styles["border"],
-            ),
-            _wo_cell(
-                ws_disc,
-                item.get("suvidha_row_number", ""),
-                fill=styles["suv_fill"],
-                border=styles["border"],
-            ),
-        ]
-        for col in admin_cols:
-            suv_col = suv_lookup.get(col)
-            value = suv_row.get(suv_col, "") if suv_col else VALUE_MISSING
-            if value == VALUE_MISSING:
-                value = "VALUE_MISSING"
-            if col in diff_cols or suv_col is None:
-                suv_cells.append(
-                    _wo_cell(
-                        ws_disc,
-                        value,
-                        fill=styles["mismatch_fill_suv"],
-                        font=styles["bold_font"],
-                        border=styles["border"],
-                        wrap=True,
-                    )
-                )
-            else:
-                suv_cells.append(
-                    _wo_cell(
-                        ws_disc,
-                        value,
-                        fill=styles["suv_fill"],
-                        border=styles["border"],
-                        wrap=True,
-                    )
-                )
-        for col in extra_suv_cols:
-            suv_cells.append(
+        for source_label, source_row, fill, diff_fill, font in [
+            ("ADMIN", admin_row, styles["admin_fill"], styles["mismatch_fill_admin"], styles["admin_font"]),
+            ("SUVIDHA", suv_row, styles["suv_fill"], styles["mismatch_fill_suv"], styles["suv_font"]),
+        ]:
+            row_cells = [
                 _wo_cell(
-                    ws_disc,
-                    suv_row.get(col, ""),
-                    fill=styles["suv_fill"],
+                    ws,
+                    source_label,
+                    fill=fill,
+                    font=font,
                     border=styles["border"],
-                    wrap=True,
                 )
-            )
-        ws_disc.append(suv_cells)
-
-        ws_disc.append(
-            [
-                _wo_cell(ws_disc, "", fill=styles["sep_fill"], border=styles["border"])
-                for _ in range(len(report_columns))
             ]
-        )
-
-    ws_admin = wb.create_sheet("Only in Admin")
-    ws_admin.append(
-        [
-            _wo_cell(
-                ws_admin,
-                col,
-                fill=styles["header_fill"],
-                font=styles["header_font"],
-                align="center",
-                wrap=True,
-                border=styles["border"],
-            )
-            for col in admin_cols
-        ]
-    )
-    for row in result.get("only_admin_rows", []):
-        ws_admin.append(
-            [
-                _wo_cell(
-                    ws_admin,
-                    row.get(col, ""),
-                    fill=styles["only_admin_fill"],
-                    border=styles["border"],
-                    wrap=True,
+            for idx in range(max_width):
+                value = source_row[idx] if idx < len(source_row) else ""
+                if value == VALUE_MISSING:
+                    value = ""
+                row_cells.append(
+                    _wo_cell(
+                        ws,
+                        value,
+                        fill=diff_fill if idx in diff_cols else None,
+                        font=styles["bold_font"] if idx in diff_cols else None,
+                        border=styles["border"],
+                        wrap=True,
+                    )
                 )
-                for col in admin_cols
-            ]
-        )
+            ws.append(row_cells)
 
-    ws_suv = wb.create_sheet("Only in Suvidha")
-    ws_suv.append(
-        [
-            _wo_cell(
-                ws_suv,
-                col,
-                fill=styles["header_fill"],
-                font=styles["header_font"],
-                align="center",
-                wrap=True,
-                border=styles["border"],
-            )
-            for col in suv_cols
-        ]
-    )
-    for row in result.get("only_suv_rows", []):
-        ws_suv.append(
+        ws.append(
             [
-                _wo_cell(
-                    ws_suv,
-                    row.get(col, ""),
-                    fill=styles["only_suv_fill"],
-                    border=styles["border"],
-                    wrap=True,
-                )
-                for col in suv_cols
+                _wo_cell(ws, "", fill=styles["sep_fill"], border=styles["border"])
+                for _ in range(max_width + 1)
             ]
         )
 
@@ -2040,46 +1976,13 @@ def api_reconcile():
         suv_upload = request.files.get("suvidha_file")
         if not admin_upload or not suv_upload:
             return jsonify({"error": "Both files are required."}), 200
-        view = _clean_text(
-            payload.get("view") or request.args.get("view") or "disc"
-        ).casefold()
-        if view not in {"disc", "oa", "os"}:
-            view = "disc"
-        page = _parse_page_number(payload.get("page") or request.args.get("page"))
-        page_size = _parse_page_size(
-            payload.get("page_size") or request.args.get("page_size")
-        )
-        date_mode = "auto"
-        cache_key = _request_fingerprint(
-            admin_upload,
-            suv_upload,
-            FIXED_ADMIN_HEADER_ROW,
-            FIXED_ADMIN_HEADER_SPAN,
-            FIXED_SUV_HEADER_ROW,
-            FIXED_SUV_HEADER_SPAN,
-            payload.get("admin_key"),
-            payload.get("suv_key") or payload.get("suvidha_key"),
-            date_mode,
-            payload.get("manual_mappings"),
-        )
-        admin = _parse_uploaded_dataset_fixed(
-            admin_upload, FIXED_ADMIN_HEADER_ROW, FIXED_ADMIN_HEADER_SPAN, "Admin"
-        )
-        suv = _parse_uploaded_dataset_fixed(
-            suv_upload, FIXED_SUV_HEADER_ROW, FIXED_SUV_HEADER_SPAN, "Suvidha"
-        )
-        result = reconcile(
-            admin,
-            suv,
-            payload.get("admin_key"),
-            payload.get("suv_key") or payload.get("suvidha_key"),
-            date_mode,
-            _parse_manual_mappings(payload.get("manual_mappings")),
-        )
+        id_column_index = _parse_column_index(payload.get("id_column_index")) or 0
+        cache_key = _request_fingerprint(admin_upload, suv_upload, id_column_index)
+        admin_rows, _, _ = _parse_matrix_from_upload(admin_upload)
+        suv_rows, _, _ = _parse_matrix_from_upload(suv_upload)
+        result = reconcile_raw(admin_rows, suv_rows, id_column_index)
         _cache_result(cache_key, result)
-        return jsonify(
-            _json_response(result, view=view, page=page, page_size=page_size)
-        )
+        return jsonify(result)
     except ReconciliationError as exc:
         logger.warning("Reconcile rejected: %s", exc)
         return jsonify({"error": str(exc)}), 200
@@ -2095,37 +1998,27 @@ def api_download():
         admin_upload = request.files.get("admin_file")
         suv_upload = request.files.get("suvidha_file")
         if not admin_upload or not suv_upload:
-            return jsonify({"error": "Both files are required."}), 400
-        date_mode = "auto"
-        cache_key = _request_fingerprint(
-            admin_upload,
-            suv_upload,
-            FIXED_ADMIN_HEADER_ROW,
-            FIXED_ADMIN_HEADER_SPAN,
-            FIXED_SUV_HEADER_ROW,
-            FIXED_SUV_HEADER_SPAN,
-            request.form.get("admin_key"),
-            request.form.get("suv_key") or request.form.get("suvidha_key"),
-            date_mode,
-            request.form.get("manual_mappings"),
-        )
-        admin = _parse_uploaded_dataset_fixed(
-            admin_upload, FIXED_ADMIN_HEADER_ROW, FIXED_ADMIN_HEADER_SPAN, "Admin"
-        )
-        suv = _parse_uploaded_dataset_fixed(
-            suv_upload, FIXED_SUV_HEADER_ROW, FIXED_SUV_HEADER_SPAN, "Suvidha"
-        )
+            return jsonify({"error": "Both files are required."}), 200
+        id_column_index = _parse_column_index(request.form.get("id_column_index")) or 0
+        cache_key = _request_fingerprint(admin_upload, suv_upload, id_column_index)
+        admin_rows, _, _ = _parse_matrix_from_upload(admin_upload)
+        suv_rows, _, _ = _parse_matrix_from_upload(suv_upload)
         result = _lookup_cached_result(cache_key)
         if result is None:
-            result = reconcile(
-                admin,
-                suv,
-                request.form.get("admin_key"),
-                request.form.get("suv_key") or request.form.get("suvidha_key"),
-                date_mode,
-                _parse_manual_mappings(request.form.get("manual_mappings")),
-            )
+            result = reconcile_raw(admin_rows, suv_rows, id_column_index)
             _cache_result(cache_key, result)
+        admin = ParsedDataset(
+            rows=[],
+            normalized_rows=[],
+            columns=[],
+            column_meta=[],
+            header_row_index=0,
+            header_row_span=0,
+            parser_notes=[],
+            source_format="raw",
+            row_numbers=[],
+        )
+        suv = admin
         buf = generate_discrepancy_report(admin, suv, result)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return send_file(
@@ -2135,10 +2028,10 @@ def api_download():
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     except ReconciliationError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": str(exc)}), 200
     except Exception as exc:  # pragma: no cover
         logger.exception("Download failed")
-        return jsonify({"error": f"Failed to generate Excel report: {exc}"}), 500
+        return jsonify({"error": f"Failed to generate Excel report: {exc}"}), 200
 
 
 @app.errorhandler(413)
