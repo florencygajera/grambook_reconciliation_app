@@ -1107,13 +1107,26 @@ function checkBothUploaded() {
       populateSel('adminKey',   data.admin_cols, ['id','no','num','code','ref','adm'], data.admin_col_meta || []);
       populateSel('suvidhaKey', data.suv_cols,   ['admin','id','no','num','code','ref'], data.suv_col_meta || []);
       document.getElementById('mapPanel').classList.add('show');
-      document.getElementById('submitBtn').disabled = false;
+      validateSubmit();
       document.getElementById('previewBlock').style.display = 'block';
       fetchPreview('admin');
       fetchPreview('suvidha');
     })
-    .catch(e => showErr('Could not read columns: ' + e));
+    .catch(e => {
+        showErr('Could not read columns: ' + e);
+        document.getElementById('submitBtn').disabled = true;
+    });
 }
+
+function validateSubmit() {
+  const btn = document.getElementById('submitBtn');
+  const ak = document.getElementById('adminKey').value;
+  const sk = document.getElementById('suvidhaKey').value;
+  btn.disabled = !(adminFile && suvidhaFile && ak && sk);
+}
+
+document.getElementById('adminKey').addEventListener('change', validateSubmit);
+document.getElementById('suvidhaKey').addEventListener('change', validateSubmit);
 
 function populateSel(selId, cols, pref, colMeta) {
   const sel = document.getElementById(selId);
@@ -1183,10 +1196,16 @@ document.getElementById('submitBtn').addEventListener('click', () => {
   fd.append('suv_header_span',   p.suv_header_span);
 
   fetch('/reconcile', { method: 'POST', body: fd })
-    .then(r => r.json())
+    .then(async r => {
+      const ct = (r.headers.get('content-type') || '').toLowerCase();
+      if (!r.ok) {
+        const d = ct.includes('application/json') ? await r.json() : { error: await r.text() };
+        throw new Error(d.error || 'Reconciliation failed');
+      }
+      return r.json();
+    })
     .then(data => {
       setBusy(false);
-      if (data.error) { showErr(data.error); return; }
       lastResult = data;
       renderStats(data.stats);
       activeTab = 'disc';
@@ -1195,7 +1214,7 @@ document.getElementById('submitBtn').addEventListener('click', () => {
       document.getElementById('results').classList.add('show');
       setTimeout(() => document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
     })
-    .catch(e => { setBusy(false); showErr('Request failed: ' + e); });
+    .catch(e => { setBusy(false); showErr('Request failed: ' + e.message); });
 });
 
 // ── download ──────────────────────────────────────────────────────────────────

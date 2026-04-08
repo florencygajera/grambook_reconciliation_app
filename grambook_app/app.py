@@ -475,22 +475,43 @@ def dataframe_from_matrix(
         if header_idx < 0 or header_idx >= len(matrix):
             header_idx = 0
 
-    raw_headers = matrix[header_idx]
+    header_span = 1
+    if manual_header_span is not None and manual_header_span > 0:
+        header_span = manual_header_span
+        if header_idx + header_span > len(matrix):
+            header_span = len(matrix) - header_idx
 
     columns = []
     seen = {}
-    for h in raw_headers:
-        clean = excel_safe_text(h).strip()
+    
+    num_cols = len(matrix[0]) if matrix else 0
+    for col_i in range(num_cols):
+        # Join the rows to form the header string
+        header_parts = []
+        for r_i in range(header_span):
+            row_data = matrix[header_idx + r_i]
+            if col_i < len(row_data):
+                val = excel_safe_text(row_data[col_i]).strip()
+                if val:
+                    header_parts.append(val)
+        
+        clean = " ".join(header_parts).strip()
+        # Clean multi spaces
+        clean = re.sub(r"\s+", " ", clean)
+
         if not clean:
             clean = "Unnamed"
+        
+        # Handle duplicates by appending _2, _3
         if clean in seen:
             seen[clean] += 1
             clean = f"{clean}_{seen[clean]}"
         else:
-            seen[clean] = 0
+            seen[clean] = 1 # Start at 1, but suffix only when > 1
+            
         columns.append(clean)
 
-    data_start = header_idx + 1
+    data_start = header_idx + header_span
     rows = []
     row_position_map: dict[int, int] = {}
     excel_row_numbers: list[int] = []
@@ -514,10 +535,10 @@ def dataframe_from_matrix(
         column_meta=[],
         normalized_map={normalize_column_key(c): c for c in columns},
         header_row_index=header_idx,
-        header_row_span=1,
+        header_row_span=header_span,
         dropped_columns=[],
         source_format=source_format,
-        parser_notes=["Real headers from file + cleaning applied. No stub columns."],
+        parser_notes=[f"Multi-row headers (span={header_span}) + cleaning applied. No stub columns."],
         kept_indices=list(range(len(rows))),
         excel_row_numbers=excel_row_numbers,
         row_position_map=row_position_map,
@@ -1510,7 +1531,7 @@ def reconcile_api():
         if not admin_file or not suvidha_file:
             return jsonify({"error": "Both files are required"}), 400
         admin_key = (request.form.get("admin_key") or "").strip()
-        suv_key = (request.form.get("suvidha_key") or "").strip()
+        suv_key = (request.form.get("suv_key") or request.form.get("suvidha_key") or "").strip()
         if not admin_key or not suv_key:
             return jsonify({"error": "Key columns not selected"}), 400
 
