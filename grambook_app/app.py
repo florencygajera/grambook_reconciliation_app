@@ -31,10 +31,7 @@ from flask import (
 from openpyxl.cell import WriteOnlyCell
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from grambook_app.app import app
 
-# Vercel expects this variable
-handler = app
 try:
     import xlrd
 except Exception:  # pragma: no cover
