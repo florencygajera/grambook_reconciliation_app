@@ -55,8 +55,14 @@ RESULT_CACHE_ORDER: list[str] = []
 RESULT_CACHE_LIMIT = 16
 RESULT_CACHE_TTL_SECONDS = int(os.environ.get("GRAMBOOK_RESULT_CACHE_TTL_SECONDS", "3600"))
 RESULT_CACHE_LOCK = threading.RLock()
-RESULT_CACHE_DIR = BASE_DIR / ".grambook_cache"
-RESULT_CACHE_DIR.mkdir(exist_ok=True)
+RESULT_CACHE_DIR = Path(
+    os.environ.get("GRAMBOOK_CACHE_DIR", tempfile.gettempdir())
+) / "grambook_cache"
+try:
+    RESULT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    RESULT_CACHE_DIR = Path(tempfile.gettempdir()) / "grambook_cache"
+    RESULT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_SESSION_KEY = "grambook_session_id"
 CSRF_SESSION_KEY = "grambook_csrf_token"
 CSRF_RATE_LIMIT_KEY = "grambook_csrf_rate_limit"
