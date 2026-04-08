@@ -894,8 +894,8 @@ tr.os-row:hover td { background: rgba(26,107,74,.07); }
   <!-- STATS -->
   <div class="stats-bar" id="statsBar">
     <div class="stat"><div class="num" id="sTotal">0</div><div class="lbl">Total Records</div></div>
-    <div class="stat ok"><div class="num" id="sMatch">0</div><div class="lbl">Matching</div></div>
-    <div class="stat disc"><div class="num" id="sDisc">0</div><div class="lbl">Discrepancies</div></div>
+    <div class="stat ok"><div class="num" id="sMatch">0</div><div class="lbl">Matched</div></div>
+    <div class="stat disc"><div class="num" id="sDisc">0</div><div class="lbl">Mismatched</div></div>
     <div class="stat oa"><div class="num" id="sOA">0</div><div class="lbl">Only in Admin</div></div>
     <div class="stat os"><div class="num" id="sOS">0</div><div class="lbl">Only in Suvidha</div></div>
   </div>
@@ -932,6 +932,13 @@ let lastResult  = null;
 let activeTab   = 'disc';
 let fetching    = false;
 let previewData = { admin: null, suvidha: null };
+let columnsReqSeq = 0;
+let previewReqSeq = { admin: 0, suvidha: 0 };
+let columnsAbort = null;
+let previewAbort = { admin: null, suvidha: null };
+let compareAbort = null;
+let downloadAbort = null;
+let columnsLoaded = false;
 
 // ── file pickers ──────────────────────────────────────────────────────────────
 function setupPicker(inputId, cardId, nameId, readyId, which) {
@@ -944,6 +951,7 @@ function setupPicker(inputId, cardId, nameId, readyId, which) {
     if (which === 'admin') adminFile = f; else suvidhaFile = f;
     document.getElementById(nameId).textContent = f.name;
     card.classList.add('ready');
+    resetComparisonState();
     checkBothUploaded();
   });
 
@@ -976,15 +984,49 @@ function getHeaderParams() {
   return {
     admin_header_row:  document.getElementById('adminHeaderRow').value,
     admin_header_span: document.getElementById('adminHeaderSpan').value,
-    suv_header_row:    document.getElementById('suvidhaHeaderRow').value,
-    suv_header_span:   document.getElementById('suvidhaHeaderSpan').value,
+    suvidha_header_row: document.getElementById('suvidhaHeaderRow').value,
+    suvidha_header_span: document.getElementById('suvidhaHeaderSpan').value,
   };
+}
+
+function resetComparisonState() {
+  lastResult = null;
+  columnsLoaded = false;
+  document.getElementById('results').classList.remove('show');
+  document.getElementById('statsBar').classList.remove('show');
+  document.getElementById('tabContent').innerHTML = '';
+  document.getElementById('sTotal').textContent = '0';
+  document.getElementById('sMatch').textContent = '0';
+  document.getElementById('sDisc').textContent = '0';
+  document.getElementById('sOA').textContent = '0';
+  document.getElementById('sOS').textContent = '0';
+  document.getElementById('tDisc').textContent = '0';
+  document.getElementById('tOA').textContent = '0';
+  document.getElementById('tOS').textContent = '0';
+  document.getElementById('submitBtn').disabled = true;
+  document.getElementById('dlBtn').disabled = true;
+}
+
+function appendUploadParams(fd) {
+  const p = getHeaderParams();
+  fd.append('admin_header_row', p.admin_header_row);
+  fd.append('admin_header_span', p.admin_header_span);
+  fd.append('suvidha_header_row', p.suvidha_header_row);
+  fd.append('suvidha_header_span', p.suvidha_header_span);
 }
 
 function setBusy(on) {
   fetching = on;
   const btn = document.getElementById('submitBtn');
+  const dl = document.getElementById('dlBtn');
   btn.disabled = on;
+  if (dl) dl.disabled = on;
+  document.getElementById('adminKey').disabled = on;
+  document.getElementById('suvidhaKey').disabled = on;
+  document.getElementById('adminHeaderRow').disabled = on;
+  document.getElementById('adminHeaderSpan').disabled = on;
+  document.getElementById('suvidhaHeaderRow').disabled = on;
+  document.getElementById('suvidhaHeaderSpan').disabled = on;
   document.getElementById('btnTxt').textContent = on ? 'Comparing…' : 'Compare Files';
   document.getElementById('btnIco').innerHTML   = on ? '<span class="spin"></span>' : '→';
 }
@@ -1001,6 +1043,10 @@ function clearErr() {
 
 // ── live preview ──────────────────────────────────────────────────────────────
 function fetchPreview(which) {
+  const reqId = ++previewReqSeq[which];
+  if (previewAbort[which]) previewAbort[which].abort();
+  const controller = new AbortController();
+  previewAbort[which] = controller;
   const file    = which === 'admin' ? adminFile : suvidhaFile;
   const hrParam = which === 'admin' ? 'adminHeaderRow'  : 'suvidhaHeaderRow';
   const hsParam = which === 'admin' ? 'adminHeaderSpan' : 'suvidhaHeaderSpan';
@@ -1019,9 +1065,10 @@ function fetchPreview(which) {
   fd.append('header_row',  document.getElementById(hrParam).value);
   fd.append('header_span', document.getElementById(hsParam).value);
 
-  fetch('/api/header-preview', { method: 'POST', body: fd })
+  fetch('/api/header-preview', { method: 'POST', body: fd, signal: controller.signal })
     .then(r => r.json())
     .then(data => {
+      if (reqId !== previewReqSeq[which]) return;
       loadEl.style.display = 'none';
       if (data.error) {
         tblEl.style.display = 'block';
@@ -1071,6 +1118,8 @@ function fetchPreview(which) {
       tblEl.innerHTML = html;
     })
     .catch(e => {
+      if (e.name === 'AbortError') return;
+      if (reqId !== previewReqSeq[which]) return;
       loadEl.style.display = 'none';
       tblEl.style.display  = 'block';
       tblEl.innerHTML = `<div class="preview-loading" style="color:var(--warn)">⚠ Could not load preview: ${esc(String(e))}</div>`;
@@ -1090,20 +1139,21 @@ document.querySelectorAll('.preview-tab').forEach(tab => {
 
 // ── column fetch (triggered when both files ready) ────────────────────────────
 function checkBothUploaded() {
+  const reqId = ++columnsReqSeq;
+  if (columnsAbort) columnsAbort.abort();
+  columnsAbort = new AbortController();
   if (!adminFile || !suvidhaFile) return;
-  const p  = getHeaderParams();
   const fd = new FormData();
   fd.append('admin_file',        adminFile);
   fd.append('suvidha_file',      suvidhaFile);
-  fd.append('admin_header_row',  p.admin_header_row);
-  fd.append('admin_header_span', p.admin_header_span);
-  fd.append('suv_header_row',    p.suv_header_row);
-  fd.append('suv_header_span',   p.suv_header_span);
+  appendUploadParams(fd);
 
-  fetch('/api/columns', { method: 'POST', body: fd })
+  fetch('/api/columns', { method: 'POST', body: fd, signal: columnsAbort.signal })
     .then(r => r.json())
     .then(data => {
+      if (reqId !== columnsReqSeq) return;
       if (data.error) { showErr(data.error); return; }
+      columnsLoaded = true;
       populateSel('adminKey',   data.admin_cols, ['id','no','num','code','ref','adm'], data.admin_col_meta || []);
       populateSel('suvidhaKey', data.suv_cols,   ['admin','id','no','num','code','ref'], data.suv_col_meta || []);
       document.getElementById('mapPanel').classList.add('show');
@@ -1113,6 +1163,8 @@ function checkBothUploaded() {
       fetchPreview('suvidha');
     })
     .catch(e => {
+        if (e.name === 'AbortError') return;
+        if (reqId !== columnsReqSeq) return;
         showErr('Could not read columns: ' + e);
         document.getElementById('submitBtn').disabled = true;
     });
@@ -1122,7 +1174,7 @@ function validateSubmit() {
   const btn = document.getElementById('submitBtn');
   const ak = document.getElementById('adminKey').value;
   const sk = document.getElementById('suvidhaKey').value;
-  btn.disabled = !(adminFile && suvidhaFile && ak && sk);
+  btn.disabled = !(adminFile && suvidhaFile && columnsLoaded && ak && sk && !fetching);
 }
 
 document.getElementById('adminKey').addEventListener('change', validateSubmit);
@@ -1147,7 +1199,7 @@ function populateSel(selId, cols, pref, colMeta) {
     return a.localeCompare(b);
   });
 
-  let html = '';
+  let html = '<option value="" selected disabled>Select key column</option>';
   groupNames.forEach(g => {
     const opts = groups[g].map((item, idx) => {
       const label = (g === 'Other') ? item.label
@@ -1158,12 +1210,6 @@ function populateSel(selId, cols, pref, colMeta) {
   });
 
   sel.innerHTML = html;
-  const guess = cols.find(c => {
-    const m = metaByCol[c] || {};
-    const searchText = `${c} ${m.hierarchy || ''}`.toLowerCase();
-    return pref.some(p => searchText.includes(p));
-  }) || cols[0];
-  if (guess) sel.value = guess;
 }
 
 // Re-fetch columns when header settings change
@@ -1172,6 +1218,7 @@ function populateSel(selId, cols, pref, colMeta) {
   if (!el) return;
   el.addEventListener('change', () => {
     if (!adminFile || !suvidhaFile) return;
+    resetComparisonState();
     checkBothUploaded();
     if (id.startsWith('admin')   && adminFile)   fetchPreview('admin');
     if (id.startsWith('suvidha') && suvidhaFile) fetchPreview('suvidha');
@@ -1181,21 +1228,22 @@ function populateSel(selId, cols, pref, colMeta) {
 // ── submit ────────────────────────────────────────────────────────────────────
 document.getElementById('submitBtn').addEventListener('click', () => {
   if (fetching) return;
+  if (!adminFile || !suvidhaFile || !columnsLoaded || !document.getElementById('adminKey').value || !document.getElementById('suvidhaKey').value) {
+    showErr('Please upload both files and select both key columns first.');
+    return;
+  }
   clearErr();
   setBusy(true);
-
-  const p  = getHeaderParams();
+  if (compareAbort) compareAbort.abort();
+  compareAbort = new AbortController();
   const fd = new FormData();
   fd.append('admin_file',        adminFile);
   fd.append('suvidha_file',      suvidhaFile);
   fd.append('admin_key',         document.getElementById('adminKey').value);
-  fd.append('suv_key',           document.getElementById('suvidhaKey').value);
-  fd.append('admin_header_row',  p.admin_header_row);
-  fd.append('admin_header_span', p.admin_header_span);
-  fd.append('suv_header_row',    p.suv_header_row);
-  fd.append('suv_header_span',   p.suv_header_span);
+  fd.append('suvidha_key',       document.getElementById('suvidhaKey').value);
+  appendUploadParams(fd);
 
-  fetch('/reconcile', { method: 'POST', body: fd })
+  fetch('/reconcile', { method: 'POST', body: fd, signal: compareAbort.signal })
     .then(async r => {
       const ct = (r.headers.get('content-type') || '').toLowerCase();
       if (!r.ok) {
@@ -1214,28 +1262,32 @@ document.getElementById('submitBtn').addEventListener('click', () => {
       document.getElementById('results').classList.add('show');
       setTimeout(() => document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
     })
-    .catch(e => { setBusy(false); showErr('Request failed: ' + e.message); });
+    .catch(e => {
+      if (e.name === 'AbortError') return;
+      setBusy(false);
+      showErr('Request failed: ' + e.message);
+    });
 });
 
 // ── download ──────────────────────────────────────────────────────────────────
 document.getElementById('dlBtn').addEventListener('click', () => {
-  if (!adminFile || !suvidhaFile) return;
+  if (!adminFile || !suvidhaFile || !columnsLoaded || !document.getElementById('adminKey').value || !document.getElementById('suvidhaKey').value) {
+    showErr('Please upload both files and select both key columns before downloading.');
+    return;
+  }
   const dl = document.getElementById('dlBtn');
   dl.disabled = true;
   dl.textContent = 'Generating…';
-
-  const p  = getHeaderParams();
+  if (downloadAbort) downloadAbort.abort();
+  downloadAbort = new AbortController();
   const fd = new FormData();
   fd.append('admin_file',        adminFile);
   fd.append('suvidha_file',      suvidhaFile);
   fd.append('admin_key',         document.getElementById('adminKey').value);
-  fd.append('suv_key',           document.getElementById('suvidhaKey').value);
-  fd.append('admin_header_row',  p.admin_header_row);
-  fd.append('admin_header_span', p.admin_header_span);
-  fd.append('suv_header_row',    p.suv_header_row);
-  fd.append('suv_header_span',   p.suv_header_span);
+  fd.append('suvidha_key',       document.getElementById('suvidhaKey').value);
+  appendUploadParams(fd);
 
-  fetch('/api/download', { method: 'POST', body: fd })
+  fetch('/api/download', { method: 'POST', body: fd, signal: downloadAbort.signal })
     .then(async r => {
       const ct = (r.headers.get('content-type') || '').toLowerCase();
       if (!r.ok) {
@@ -1262,6 +1314,7 @@ document.getElementById('dlBtn').addEventListener('click', () => {
       dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
     })
     .catch(e => {
+      if (e.name === 'AbortError') return;
       showErr(e.message);
       dl.disabled = false;
       dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
@@ -1288,10 +1341,10 @@ function setTab(tab) {
 function renderStats(s) {
   document.getElementById('sTotal').textContent = s.total;
   document.getElementById('sMatch').textContent = s.matched;
-  document.getElementById('sDisc').textContent  = s.disc;
+  document.getElementById('sDisc').textContent  = s.mismatched ?? s.disc;
   document.getElementById('sOA').textContent    = s.only_a;
   document.getElementById('sOS').textContent    = s.only_s;
-  document.getElementById('tDisc').textContent  = s.disc;
+  document.getElementById('tDisc').textContent  = s.mismatched ?? s.disc;
   document.getElementById('tOA').textContent    = s.only_a;
   document.getElementById('tOS').textContent    = s.only_s;
   document.getElementById('statsBar').classList.add('show');
