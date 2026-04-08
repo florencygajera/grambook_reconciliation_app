@@ -12,6 +12,7 @@ import secrets
 import signal
 import tempfile
 import time
+import warnings
 import unicodedata
 import threading
 from collections import defaultdict
@@ -43,9 +44,18 @@ STATIC_DIR = BASE_DIR / "static"
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
-app.config["SECRET_KEY"] = os.environ.get(
-    "GRAMBOOK_SECRET_KEY", "grambook-development-secret-key"
-)
+_secret_key = os.environ.get("GRAMBOOK_SECRET_KEY")
+if not _secret_key:
+    if os.environ.get("FLASK_ENV") == "production":
+        raise RuntimeError(
+            "GRAMBOOK_SECRET_KEY environment variable must be set in production."
+        )
+    _secret_key = "grambook-development-secret-key"
+    warnings.warn(
+        "GRAMBOOK_SECRET_KEY is not set. Set it via environment variable before deploying.",
+        stacklevel=1,
+    )
+app.config["SECRET_KEY"] = _secret_key
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("grambook")
@@ -728,20 +738,6 @@ def _parse_uploaded_dataset_fixed(
         return parse_uploaded_dataset(upload, 1, 1)
 
 
-def _parse_optional_int(value: str | None) -> int | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if not re.fullmatch(r"\d+", text):
-        raise ReconciliationError("Header values must be positive integers.")
-    num = int(text)
-    if num <= 0:
-        raise ReconciliationError("Header values must be greater than 0.")
-    return num
-
-
 def _parse_column_index(value: str | None) -> int | None:
     if value is None:
         return None
@@ -1252,10 +1248,10 @@ def normalize_key(value: Any) -> str:
 
 def normalize_value(value: Any) -> str:
     if value is None:
-        return "0"
+        return ""
     v = str(value).strip()
     if v == "":
-        return "0"
+        return ""
     return v
 
 
@@ -1336,8 +1332,6 @@ def _compare_pair(
     unmapped_suv = unmapped_suv or []
     admin_vals = [admin_rec.norm_row.get(col, "") for col in admin.columns]
     suv_vals = [suv_rec.norm_row.get(col, "") for col in suv.columns]
-    if admin_vals == suv_vals:
-        return None
 
     max_len = max(len(admin.columns), len(suv.columns))
     diffs: dict[str, dict[str, Any]] = {}
@@ -1694,10 +1688,10 @@ def generate_discrepancy_report(
 ) -> tempfile.SpooledTemporaryFile:
     def normalize_export_value(v: Any) -> str:
         if v is None:
-            return "0"
+            return ""
         v = str(v).strip()
         if v == "":
-            return "0"
+            return ""
         return v
 
     styles = _excel_styles()
@@ -1752,8 +1746,8 @@ def generate_discrepancy_report(
     for item in items:
         max_width = max(
             max_width,
-            len(_row_list(item, "admin", admin.columns)),
-            len(_row_list(item, "suvidha", suv.columns)),
+            len(_row_list(item, "admin", [])),
+            len(_row_list(item, "suvidha", [])),
         )
     headers = [f"Column {i + 1}" for i in range(max_width)]
 
@@ -1975,38 +1969,50 @@ def api_reconcile():
         admin_upload = request.files.get("admin_file")
         suv_upload = request.files.get("suvidha_file")
         if not admin_upload or not suv_upload:
-            return jsonify({"error": "Both files are required."}), 200
+            return jsonify({"error": "Both files are required."}), 400
         id_column_index = _parse_column_index(payload.get("id_column_index")) or 0
         cache_key = _request_fingerprint(admin_upload, suv_upload, id_column_index)
+        admin_upload.stream.seek(0)
+        suv_upload.stream.seek(0)
         admin_rows, _, _ = _parse_matrix_from_upload(admin_upload)
         suv_rows, _, _ = _parse_matrix_from_upload(suv_upload)
         result = reconcile_raw(admin_rows, suv_rows, id_column_index)
         _cache_result(cache_key, result)
-        return jsonify(result)
+        response = dict(result)
+        response["cache_key"] = cache_key
+        return jsonify(response)
     except ReconciliationError as exc:
         logger.warning("Reconcile rejected: %s", exc)
-        return jsonify({"error": str(exc)}), 200
+        return jsonify({"error": str(exc)}), 400
     except Exception as exc:  # pragma: no cover
         logger.exception("Reconcile failed")
-        return jsonify({"error": f"Reconciliation failed: {exc}"}), 200
+        return jsonify({"error": f"Reconciliation failed: {exc}"}), 500
 
 
 @app.route("/api/download", methods=["POST"])
 def api_download():
     try:
         _csrf_check()
-        admin_upload = request.files.get("admin_file")
-        suv_upload = request.files.get("suvidha_file")
-        if not admin_upload or not suv_upload:
-            return jsonify({"error": "Both files are required."}), 200
-        id_column_index = _parse_column_index(request.form.get("id_column_index")) or 0
-        cache_key = _request_fingerprint(admin_upload, suv_upload, id_column_index)
-        admin_rows, _, _ = _parse_matrix_from_upload(admin_upload)
-        suv_rows, _, _ = _parse_matrix_from_upload(suv_upload)
-        result = _lookup_cached_result(cache_key)
+        payload = _request_payload()
+        cache_key = _clean_text(payload.get("cache_key"))
+        result = _lookup_cached_result(cache_key) if cache_key else None
+
         if result is None:
+            admin_upload = request.files.get("admin_file")
+            suv_upload = request.files.get("suvidha_file")
+            if not admin_upload or not suv_upload:
+                return jsonify({"error": "Either cache_key or both files are required."}), 400
+            id_column_index = _parse_column_index(
+                payload.get("id_column_index") or request.form.get("id_column_index")
+            ) or 0
+            cache_key = _request_fingerprint(admin_upload, suv_upload, id_column_index)
+            admin_upload.stream.seek(0)
+            suv_upload.stream.seek(0)
+            admin_rows, _, _ = _parse_matrix_from_upload(admin_upload)
+            suv_rows, _, _ = _parse_matrix_from_upload(suv_upload)
             result = reconcile_raw(admin_rows, suv_rows, id_column_index)
             _cache_result(cache_key, result)
+
         admin = ParsedDataset(
             rows=[],
             normalized_rows=[],
@@ -2028,10 +2034,10 @@ def api_download():
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     except ReconciliationError as exc:
-        return jsonify({"error": str(exc)}), 200
+        return jsonify({"error": str(exc)}), 400
     except Exception as exc:  # pragma: no cover
         logger.exception("Download failed")
-        return jsonify({"error": f"Failed to generate Excel report: {exc}"}), 200
+        return jsonify({"error": f"Failed to generate Excel report: {exc}"}), 500
 
 
 @app.errorhandler(413)

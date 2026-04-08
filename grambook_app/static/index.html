@@ -296,6 +296,7 @@ tr:last-child td { border-bottom: 0; }
 let adminFile = null;
 let suvidhaFile = null;
 let lastResult = null;
+let lastCacheKey = null;
 let csrfToken = '';
 
 const csrfReady = fetch('/api/csrf')
@@ -354,6 +355,8 @@ function setFile(input, targetName, setter) {
     const file = input.files && input.files[0];
     if (!file) return;
     setter(file);
+    lastResult = null;
+    lastCacheKey = null;
     document.getElementById(targetName).textContent = file.name;
     clearErr();
     updateButtons();
@@ -364,7 +367,11 @@ setFile(document.getElementById('adminFile'), 'adminName', file => { adminFile =
 setFile(document.getElementById('suvidhaFile'), 'suvidhaName', file => { suvidhaFile = file; });
 populateColumns();
 
-document.getElementById('idColumn').addEventListener('change', updateButtons);
+document.getElementById('idColumn').addEventListener('change', () => {
+  lastResult = null;
+  lastCacheKey = null;
+  updateButtons();
+});
 
 async function postForm(url, formData) {
   await csrfReady;
@@ -414,7 +421,7 @@ function renderMismatches(rows) {
     const width = Math.max(adminRow.length, suvRow.length);
     const diff = new Set(item.diff_columns || []);
     html += `<div class="card" style="margin-bottom:12px;">`;
-    html += `<strong>#{idx + 1} ID: ${esc(item.id || '')}</strong>`;
+    html += `<strong>#${idx + 1} ID: ${esc(item.id || '')}</strong>`;
     html += `<div class="table-wrap" style="margin-top:10px;"><table><thead><tr><th>Source</th>`;
     for (let i = 0; i < width; i += 1) {
       html += `<th>Column ${columnLabel(i)}</th>`;
@@ -431,7 +438,8 @@ function renderMismatches(rows) {
       const val = suvRow[i] ?? '';
       html += `<td class="${diff.has(i) ? 'diff-cell' : ''}">${esc(val)}</td>`;
     }
-    html += '</tr></tbody></table></div></div>';
+    html += '</tr></tbody></table></div>';
+    html += '</div>';
   });
   return html;
 }
@@ -455,6 +463,7 @@ async function compareFiles() {
   try {
     const data = await postForm('/reconcile', formData);
     lastResult = data;
+    lastCacheKey = data.cache_key || null;
     document.getElementById('stats').style.display = 'grid';
     document.getElementById('results').style.display = 'block';
     const mismatches = data.mismatches || [];
@@ -480,15 +489,26 @@ document.getElementById('downloadBtn').addEventListener('click', async () => {
     showErr('Upload both files and select a column first.');
     return;
   }
-  const formData = new FormData();
-  formData.append('admin_file', adminFile);
-  formData.append('suvidha_file', suvidhaFile);
-  formData.append('id_column_index', document.getElementById('idColumn').value);
   try {
+    await csrfReady;
+    const useCacheKey = !!lastCacheKey;
     const response = await fetch('/api/download', {
       method: 'POST',
-      body: formData,
-      headers: { 'X-Grambook-CSRF': csrfToken },
+      headers: useCacheKey
+        ? {
+            'Content-Type': 'application/json',
+            'X-Grambook-CSRF': csrfToken,
+          }
+        : { 'X-Grambook-CSRF': csrfToken },
+      body: useCacheKey
+        ? JSON.stringify({ cache_key: lastCacheKey })
+        : (() => {
+            const formData = new FormData();
+            formData.append('admin_file', adminFile);
+            formData.append('suvidha_file', suvidhaFile);
+            formData.append('id_column_index', document.getElementById('idColumn').value);
+            return formData;
+          })(),
     });
     const contentType = (response.headers.get('content-type') || '').toLowerCase();
     if (contentType.includes('application/json')) {
