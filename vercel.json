@@ -2,9 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.py": {
-      "runtime": "python3.11",
       "maxDuration": 30,
-      "excludeFiles": "{grambook_app/venv/**,grambook_app/.pytest_cache/**,grambook_app/__pycache__/**,grambook_app/.grambook_cache/**,**/*.pyc}"
+      "excludeFiles": "{grambook_app/venv/**,grambook_app/.pytest_cache/**,grambook_app/__pycache__/**,grambook_app/.grambook_cache/**,**/*.pyc}",
+      "runtime": "python3.9"
     }
   },
   "routes": [

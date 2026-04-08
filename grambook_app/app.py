@@ -19,11 +19,22 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, after_this_request, jsonify, request, send_file, send_from_directory, session
+from flask import (
+    Flask,
+    after_this_request,
+    jsonify,
+    request,
+    send_file,
+    send_from_directory,
+    session,
+)
 from openpyxl.cell import WriteOnlyCell
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from grambook_app.app import app
 
+# Vercel expects this variable
+handler = app
 try:
     import xlrd
 except Exception:  # pragma: no cover
@@ -53,16 +64,12 @@ logger = logging.getLogger("grambook")
 RESULT_CACHE: dict[str, dict[str, Any]] = {}
 RESULT_CACHE_ORDER: list[str] = []
 RESULT_CACHE_LIMIT = 16
-RESULT_CACHE_TTL_SECONDS = int(os.environ.get("GRAMBOOK_RESULT_CACHE_TTL_SECONDS", "3600"))
+RESULT_CACHE_TTL_SECONDS = int(
+    os.environ.get("GRAMBOOK_RESULT_CACHE_TTL_SECONDS", "3600")
+)
 RESULT_CACHE_LOCK = threading.RLock()
-RESULT_CACHE_DIR = Path(
-    os.environ.get("GRAMBOOK_CACHE_DIR", tempfile.gettempdir())
-) / "grambook_cache"
-try:
-    RESULT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-except Exception:
-    RESULT_CACHE_DIR = Path(tempfile.gettempdir()) / "grambook_cache"
-    RESULT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+RESULT_CACHE_DIR = BASE_DIR / ".grambook_cache"
+RESULT_CACHE_DIR.mkdir(exist_ok=True)
 CACHE_SESSION_KEY = "grambook_session_id"
 CSRF_SESSION_KEY = "grambook_csrf_token"
 CSRF_RATE_LIMIT_KEY = "grambook_csrf_rate_limit"
@@ -181,7 +188,7 @@ def _validate_upload_bytes(file_bytes: bytes, filename: str) -> None:
             )
         return
     if filename.endswith(".xls"):
-        if not file_bytes.startswith(b"\xD0\xCF\x11\xE0"):
+        if not file_bytes.startswith(b"\xd0\xcf\x11\xe0"):
             raise ReconciliationError(
                 "The .xls file is malformed or does not look like a workbook."
             )
@@ -388,14 +395,18 @@ def _request_fingerprint(
     ).hexdigest()
 
 
-def _wrap_cache_result(result: dict[str, Any], cached_at: float | None = None) -> dict[str, Any]:
+def _wrap_cache_result(
+    result: dict[str, Any], cached_at: float | None = None
+) -> dict[str, Any]:
     return {
         "cached_at": cached_at if cached_at is not None else time.time(),
         "result": result,
     }
 
 
-def _cache_entry_age(entry: dict[str, Any], fallback_cached_at: float | None = None) -> float | None:
+def _cache_entry_age(
+    entry: dict[str, Any], fallback_cached_at: float | None = None
+) -> float | None:
     if not isinstance(entry, dict):
         return None
     cached_at = entry.get("cached_at")
@@ -466,7 +477,10 @@ def _lookup_cached_result(cache_key: str) -> dict[str, Any] | None:
             RESULT_CACHE_ORDER[:] = [k for k in RESULT_CACHE_ORDER if k != cache_key]
             RESULT_CACHE_ORDER.append(cache_key)
             cached_at = _cache_entry_age(result)
-            if cached_at is not None and time.time() - cached_at > RESULT_CACHE_TTL_SECONDS:
+            if (
+                cached_at is not None
+                and time.time() - cached_at > RESULT_CACHE_TTL_SECONDS
+            ):
                 RESULT_CACHE.pop(cache_key, None)
                 return None
             if "result" in result and "cached_at" in result:
@@ -571,7 +585,9 @@ def _build_discrepancy_report_buffer(
     styles = _excel_styles()
     wb = Workbook(write_only=True)
 
-    def _wo_cell(ws, value, *, fill=None, font=None, align="left", wrap=False, border=None):
+    def _wo_cell(
+        ws, value, *, fill=None, font=None, align="left", wrap=False, border=None
+    ):
         cell = WriteOnlyCell(ws, value=value)
         if fill is not None:
             cell.fill = fill
@@ -591,7 +607,9 @@ def _build_discrepancy_report_buffer(
     def _diff_columns(item: dict[str, Any], width: int) -> set[int]:
         diffs = item.get("diff_columns")
         if isinstance(diffs, list):
-            return {int(idx) for idx in diffs if isinstance(idx, int) and 0 <= idx < width}
+            return {
+                int(idx) for idx in diffs if isinstance(idx, int) and 0 <= idx < width
+            }
         return set()
 
     items = list(result.get("mismatches", []))
@@ -959,6 +977,7 @@ def api_download():
             _cache_result(cache_key, result)
 
         tmp_path = generate_discrepancy_report(result)
+
         @after_this_request
         def _cleanup_download(response):
             response.call_on_close(lambda: tmp_path.unlink(missing_ok=True))
@@ -989,4 +1008,3 @@ if __name__ == "__main__":
     print("Grambook Reconciliation Tool")
     print(f"Static dir: {STATIC_DIR}")
     app.run(debug=True, host="127.0.0.1", port=5000)
-
