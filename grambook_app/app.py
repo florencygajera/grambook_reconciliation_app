@@ -516,7 +516,29 @@ def normalize_key(value: Any) -> str:
 
 
 def normalize_value(value: Any) -> str:
-    return _normalize_for_compare(value)
+    if value is None:
+        return "0"
+    v = str(value).strip()
+    if v == "":
+        return "0"
+    try:
+        num = float(v)
+        if num == 0:
+            return "0"
+        return str(num)
+    except Exception:
+        return v.lower()
+
+
+def values_equal(v1: Any, v2: Any) -> bool:
+    n1 = normalize_value(v1)
+    n2 = normalize_value(v2)
+    if n1 == n2:
+        return True
+    try:
+        return float(n1) == float(n2)
+    except Exception:
+        return False
 
 
 def _excel_styles() -> dict[str, Any]:
@@ -764,8 +786,9 @@ def reconcile_raw(
             diff_cols: list[int] = []
             max_len = max(len(a_row), len(b_row))
             for i in range(max_len):
-                if normalize_value(a_row[i] if i < len(a_row) else "") != normalize_value(
-                    b_row[i] if i < len(b_row) else ""
+                if not values_equal(
+                    a_row[i] if i < len(a_row) else "",
+                    b_row[i] if i < len(b_row) else "",
                 ):
                     diff_cols.append(i)
             if diff_cols:
