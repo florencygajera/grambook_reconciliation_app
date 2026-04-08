@@ -692,6 +692,89 @@ tr.os-row:hover td { background: rgba(26,107,74,.07); }
 .preview-row-count.admin   { background: var(--admin-m); color: var(--admin-h); }
 .preview-row-count.suvidha { background: var(--suv-m);   color: var(--suv-h); }
 
+.mapping-conflicts {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid rgba(44,74,140,.18);
+  border-radius: var(--r-md);
+  background: #f8faff;
+  display: none;
+}
+
+.mapping-conflicts.show { display: block; }
+.mapping-conflicts h4 {
+  font-size: .82rem;
+  margin-bottom: 6px;
+  color: var(--accent);
+}
+.mapping-conflicts p {
+  font-size: .75rem;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+.conflict-list {
+  display: grid;
+  gap: 12px;
+}
+.conflict-item {
+  display: grid;
+  grid-template-columns: 1.2fr .9fr 1.4fr;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+.conflict-item .label {
+  font-family: 'DM Mono', monospace;
+  font-size: .72rem;
+  color: var(--ink);
+}
+.conflict-item .label small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+}
+.conflict-item select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border2);
+  border-radius: var(--r-sm);
+  font-family: 'DM Mono', monospace;
+  font-size: .75rem;
+}
+
+.pagination-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 18px 0 20px;
+}
+.pagination-bar.show { display: flex; }
+.page-btn, .page-chip {
+  border: 1px solid var(--border2);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  font-family: 'DM Mono', monospace;
+  font-size: .72rem;
+  color: var(--ink2);
+}
+.page-btn {
+  cursor: pointer;
+}
+.page-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.page-chip.active {
+  background: var(--ink);
+  color: #fff;
+  border-color: var(--ink);
+}
+
 .empty { padding: 64px; text-align: center; color: var(--muted); font-size: .85rem; }
 .empty .ico { font-size: 2.4rem; margin-bottom: 12px; display: block; }
 .empty strong { display: block; color: var(--ink2); margin-bottom: 4px; font-weight: 500; }
@@ -792,10 +875,9 @@ tr.os-row:hover td { background: rgba(26,107,74,.07); }
       <div class="header-row">
         <div class="map-field">
           <label class="adm">Admin — header row start</label>
-          <select id="adminHeaderRow">
-            <option value="">Auto-detect</option>
+          <select id="adminHeaderRow" disabled>
             <option value="1">Row 1</option>
-            <option value="2">Row 2</option>
+            <option value="2" selected>Row 2</option>
             <option value="3">Row 3</option>
             <option value="4">Row 4</option>
             <option value="5">Row 5</option>
@@ -803,11 +885,10 @@ tr.os-row:hover td { background: rgba(26,107,74,.07); }
         </div>
         <div class="map-field">
           <label class="adm">Admin — header span</label>
-          <select id="adminHeaderSpan">
-            <option value="">Auto-detect</option>
+          <select id="adminHeaderSpan" disabled>
             <option value="1">1 row</option>
             <option value="2">2 rows</option>
-            <option value="3">3 rows</option>
+            <option value="3" selected>3 rows</option>
             <option value="4">4 rows</option>
             <option value="5">5 rows</option>
           </select>
@@ -816,9 +897,8 @@ tr.os-row:hover td { background: rgba(26,107,74,.07); }
       <div class="header-row">
         <div class="map-field">
           <label class="suv">Suvidha — header row start</label>
-          <select id="suvidhaHeaderRow">
-            <option value="">Auto-detect</option>
-            <option value="1">Row 1</option>
+          <select id="suvidhaHeaderRow" disabled>
+            <option value="1" selected>Row 1</option>
             <option value="2">Row 2</option>
             <option value="3">Row 3</option>
             <option value="4">Row 4</option>
@@ -827,13 +907,23 @@ tr.os-row:hover td { background: rgba(26,107,74,.07); }
         </div>
         <div class="map-field">
           <label class="suv">Suvidha — header span</label>
-          <select id="suvidhaHeaderSpan">
-            <option value="">Auto-detect</option>
+          <select id="suvidhaHeaderSpan" disabled>
             <option value="1">1 row</option>
-            <option value="2">2 rows</option>
+            <option value="2" selected>2 rows</option>
             <option value="3">3 rows</option>
             <option value="4">4 rows</option>
             <option value="5">5 rows</option>
+          </select>
+        </div>
+      </div>
+      <div class="header-row" style="grid-template-columns:1fr">
+        <div class="map-field">
+          <label>Default Date Mode</label>
+          <select id="dateMode" disabled>
+            <option value="auto" selected>Auto</option>
+            <option value="strict">Strict</option>
+            <option value="day_first">DD-MM</option>
+            <option value="month_first">MM-DD</option>
           </select>
         </div>
       </div>
@@ -850,6 +940,12 @@ tr.os-row:hover td { background: rgba(26,107,74,.07); }
         <label class="suv">Suvidha — key column</label>
         <select id="suvidhaKey"></select>
       </div>
+    </div>
+
+    <div class="mapping-conflicts" id="mappingConflicts">
+      <h4>Column Mapping Confirmation Required</h4>
+      <p>Resolve these ambiguous columns before comparing. Select the exact Suvidha column for each Admin field.</p>
+      <div class="conflict-list" id="mappingConflictList"></div>
     </div>
 
     <!-- Live Data Preview -->
@@ -904,7 +1000,15 @@ tr.os-row:hover td { background: rgba(26,107,74,.07); }
   <div id="results">
     <div class="results-header">
       <div class="results-title">Comparison Results</div>
-      <button class="btn-dl" id="dlBtn">⬇&nbsp; Download Report (.xlsx)</button>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <select id="pageSize" style="padding:9px 12px;border:1px solid var(--border2);border-radius:6px;font-family:'DM Mono',monospace;font-size:.72rem">
+          <option value="50">50 / page</option>
+          <option value="100">100 / page</option>
+          <option value="200" selected>200 / page</option>
+          <option value="500">500 / page</option>
+        </select>
+        <button class="btn-dl" id="dlBtn">⬇&nbsp; Download Report (.xlsx)</button>
+      </div>
     </div>
 
     <div class="tabs">
@@ -912,6 +1016,8 @@ tr.os-row:hover td { background: rgba(26,107,74,.07); }
       <div class="tab" data-tab="oa">Only in Admin <span class="badge" id="tOA">0</span></div>
       <div class="tab" data-tab="os">Only in Suvidha <span class="badge" id="tOS">0</span></div>
     </div>
+
+    <div class="pagination-bar" id="paginationBar"></div>
 
     <div id="tabContent"></div>
   </div>
@@ -941,6 +1047,13 @@ let downloadAbort = null;
 let columnsLoaded = false;
 let csrfToken = '';
 const REQUEST_TIMEOUT_MS = 90000;
+let currentView = 'disc';
+let currentPage = 1;
+let currentPageSize = 200;
+let currentPagination = null;
+let currentData = [];
+let mappingConflicts = [];
+let manualMappings = {};
 const csrfReady = fetch('/api/csrf')
   .then(r => r.json())
   .then(data => { csrfToken = data.token || ''; })
@@ -988,16 +1101,96 @@ function esc(s) {
 }
 function getHeaderParams() {
   return {
-    admin_header_row:  document.getElementById('adminHeaderRow').value,
-    admin_header_span: document.getElementById('adminHeaderSpan').value,
-    suvidha_header_row: document.getElementById('suvidhaHeaderRow').value,
-    suvidha_header_span: document.getElementById('suvidhaHeaderSpan').value,
+    admin_header_row: '2',
+    admin_header_span: '3',
+    suvidha_header_row: '1',
+    suvidha_header_span: '2',
   };
+}
+
+function getDateMode() {
+  return 'auto';
+}
+
+function getPageSize() {
+  return Number(document.getElementById('pageSize').value || currentPageSize || 200);
+}
+
+function hasValidHeaderValue(id) {
+  const value = document.getElementById(id).value;
+  return value === '' || /^\d+$/.test(String(value));
+}
+
+function collectManualMappings() {
+  const mapping = {};
+  document.querySelectorAll('#mappingConflictList [data-admin-col]').forEach(row => {
+    const adminCol = row.dataset.adminCol;
+    const select = row.querySelector('select');
+    if (select && select.value) {
+      mapping[adminCol] = select.value;
+    }
+  });
+  return mapping;
+}
+
+function clearMappingConflicts() {
+  mappingConflicts = [];
+  manualMappings = {};
+  const panel = document.getElementById('mappingConflicts');
+  const list = document.getElementById('mappingConflictList');
+  if (panel) panel.classList.remove('show');
+  if (list) list.innerHTML = '';
+}
+
+function renderMappingConflicts(conflicts) {
+  const panel = document.getElementById('mappingConflicts');
+  const list = document.getElementById('mappingConflictList');
+  mappingConflicts = [];
+  manualMappings = {};
+  if (panel) panel.classList.remove('show');
+  if (list) list.innerHTML = '';
+}
+
+function validateBeforeApiCall(requireMappings = false) {
+  clearErr();
+  if (!adminFile || !suvidhaFile) {
+    showErr('Upload both Admin and Suvidha files first.');
+    return false;
+  }
+  return true;
+}
+
+function buildRequestForm(view, page, pageSize) {
+  const fd = new FormData();
+  fd.append('admin_file', adminFile);
+  fd.append('suvidha_file', suvidhaFile);
+  fd.append('admin_key', document.getElementById('adminKey').value);
+  fd.append('suvidha_key', document.getElementById('suvidhaKey').value);
+  fd.append('date_mode', getDateMode());
+  fd.append('view', view);
+  fd.append('page', String(page));
+  fd.append('page_size', String(pageSize));
+  fd.append('manual_mappings', JSON.stringify(collectManualMappings()));
+  appendUploadParams(fd);
+  return fd;
+}
+
+function resetPaginationState() {
+  currentPagination = null;
+  currentPage = 1;
+  currentView = 'disc';
+  currentData = [];
+  const bar = document.getElementById('paginationBar');
+  if (bar) {
+    bar.classList.remove('show');
+    bar.innerHTML = '';
+  }
 }
 
 function resetComparisonState() {
   lastResult = null;
   columnsLoaded = false;
+  resetPaginationState();
   document.getElementById('results').classList.remove('show');
   document.getElementById('statsBar').classList.remove('show');
   document.getElementById('tabContent').innerHTML = '';
@@ -1011,6 +1204,7 @@ function resetComparisonState() {
   document.getElementById('tOS').textContent = '0';
   document.getElementById('submitBtn').disabled = true;
   document.getElementById('dlBtn').disabled = true;
+  clearMappingConflicts();
 }
 
 function appendUploadParams(fd) {
@@ -1054,6 +1248,8 @@ function setBusy(on) {
   document.getElementById('adminHeaderSpan').disabled = on;
   document.getElementById('suvidhaHeaderRow').disabled = on;
   document.getElementById('suvidhaHeaderSpan').disabled = on;
+  document.getElementById('dateMode').disabled = on;
+  document.getElementById('pageSize').disabled = on;
   document.getElementById('btnTxt').textContent = on ? 'Comparing…' : 'Compare Files';
   document.getElementById('btnIco').innerHTML   = on ? '<span class="spin"></span>' : '→';
 }
@@ -1089,6 +1285,7 @@ function fetchPreview(which) {
 
   const fd = new FormData();
   fd.append('file',        file);
+  fd.append('role',        which);
   fd.append('header_row',  document.getElementById(hrParam).value);
   fd.append('header_span', document.getElementById(hsParam).value);
 
@@ -1188,8 +1385,10 @@ function checkBothUploaded() {
       if (reqId !== columnsReqSeq) return;
       if (data.error) { showErr(data.error); return; }
       columnsLoaded = true;
-      populateSel('adminKey',   data.admin_cols, ['id','no','num','code','ref','adm'], data.admin_col_meta || []);
-      populateSel('suvidhaKey', data.suv_cols,   ['admin','id','no','num','code','ref'], data.suv_col_meta || []);
+      currentPageSize = getPageSize();
+      populateSel('adminKey',   data.admin_cols, ['id','no','num','code','ref','adm'], data.admin_col_meta || [], data.suggested_keys?.admin || '');
+      populateSel('suvidhaKey', data.suv_cols,   ['admin','id','no','num','code','ref'], data.suv_col_meta || [], data.suggested_keys?.suvidha || '');
+      renderMappingConflicts([]);
       document.getElementById('mapPanel').classList.add('show');
       validateSubmit();
       document.getElementById('previewBlock').style.display = 'block';
@@ -1211,15 +1410,102 @@ function checkBothUploaded() {
 
 function validateSubmit() {
   const btn = document.getElementById('submitBtn');
-  const ak = document.getElementById('adminKey').value;
-  const sk = document.getElementById('suvidhaKey').value;
-  btn.disabled = !(adminFile && suvidhaFile && columnsLoaded && ak && sk && !fetching);
+  btn.disabled = !(adminFile && suvidhaFile && !fetching);
 }
 
-document.getElementById('adminKey').addEventListener('change', validateSubmit);
-document.getElementById('suvidhaKey').addEventListener('change', validateSubmit);
+function renderPaginationControls(pagination) {
+  const bar = document.getElementById('paginationBar');
+  if (!bar) return;
+  currentPagination = pagination || null;
+  if (!pagination || !pagination.total_pages || pagination.total_pages <= 1) {
+    bar.classList.remove('show');
+    bar.innerHTML = '';
+    return;
+  }
+  const totalPages = pagination.total_pages;
+  const current = pagination.current_page;
+  const mkPageBtn = (label, page, disabled = false, active = false) => {
+    const cls = active ? 'page-chip active' : 'page-chip';
+    return `<button class="${cls}" data-page="${page}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+  };
+  const windowSize = 5;
+  let start = Math.max(1, current - Math.floor(windowSize / 2));
+  let end = Math.min(totalPages, start + windowSize - 1);
+  start = Math.max(1, end - windowSize + 1);
+  const pages = [];
+  if (current > 1) pages.push(`<button class="page-btn" data-page="${current - 1}">Prev</button>`);
+  if (start > 1) pages.push(mkPageBtn('1', 1));
+  if (start > 2) pages.push('<span class="page-chip">…</span>');
+  for (let p = start; p <= end; p += 1) {
+    pages.push(mkPageBtn(String(p), p, false, p === current));
+  }
+  if (end < totalPages - 1) pages.push('<span class="page-chip">…</span>');
+  if (end < totalPages) pages.push(mkPageBtn(String(totalPages), totalPages));
+  if (current < totalPages) pages.push(`<button class="page-btn" data-page="${current + 1}">Next</button>`);
+  pages.push(`<span class="page-chip">Page ${current} of ${totalPages}</span>`);
+  bar.innerHTML = pages.join('');
+  bar.classList.add('show');
+  bar.querySelectorAll('button[data-page]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const page = Number(btn.dataset.page);
+      if (!page || page === current) return;
+      setBusy(true);
+      requestPage(currentView, page)
+        .then(data => {
+          lastResult = data;
+          currentData = data.data || [];
+          currentPagination = data.pagination || null;
+          renderStats(data.stats);
+          setTab(currentView);
+          renderTab(data, currentView);
+          renderPaginationControls(data.pagination);
+          setBusy(false);
+        })
+        .catch(e => {
+          setBusy(false);
+          if (e.name === 'AbortError') return;
+          showErr('Request failed: ' + e.message);
+        });
+    });
+  });
+}
 
-function populateSel(selId, cols, pref, colMeta) {
+async function requestPage(view, page) {
+  const pageSize = getPageSize();
+  if (compareAbort) compareAbort.abort();
+  compareAbort = new AbortController();
+  currentView = view;
+  currentPage = page;
+  const fd = buildRequestForm(view, page, pageSize);
+  try {
+    const r = await postForm('/reconcile', fd, compareAbort);
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    if (!r.ok) {
+      const d = ct.includes('application/json') ? await r.json() : { error: await r.text() };
+      throw new Error(d.error || 'Reconciliation failed');
+    }
+    return await r.json();
+  } finally {
+    // leave busy state management to caller
+  }
+}
+
+document.getElementById('adminKey').addEventListener('change', () => {
+  if (adminFile && suvidhaFile) {
+    resetComparisonState();
+    checkBothUploaded();
+  }
+  validateSubmit();
+});
+document.getElementById('suvidhaKey').addEventListener('change', () => {
+  if (adminFile && suvidhaFile) {
+    resetComparisonState();
+    checkBothUploaded();
+  }
+  validateSubmit();
+});
+
+function populateSel(selId, cols, pref, colMeta, suggestedKey = '') {
   const sel = document.getElementById(selId);
   const metaByCol = {};
   (colMeta || []).forEach(m => { if (m && m.column) metaByCol[m.column] = m; });
@@ -1255,6 +1541,10 @@ function populateSel(selId, cols, pref, colMeta) {
     || Object.values(groups).flat().find(item => item.preferred);
   if (preferredOption) {
     sel.value = preferredOption.value;
+  } else if (suggestedKey) {
+    sel.value = suggestedKey;
+  } else if (!sel.value && sel.options.length > 1) {
+    sel.value = sel.options[1].value;
   }
 }
 
@@ -1271,40 +1561,73 @@ function populateSel(selId, cols, pref, colMeta) {
   });
 });
 
+document.getElementById('dateMode').addEventListener('change', () => {
+  if (lastResult && adminFile && suvidhaFile && columnsLoaded) {
+    setBusy(true);
+    requestPage(currentView, 1)
+      .then(data => {
+        lastResult = data;
+        currentData = data.data || [];
+        currentPagination = data.pagination || null;
+        renderStats(data.stats);
+        setTab(currentView);
+        renderTab(data, currentView);
+        renderPaginationControls(data.pagination);
+        setBusy(false);
+      })
+      .catch(e => {
+        setBusy(false);
+        if (e.name === 'AbortError') return;
+        showErr('Request failed: ' + e.message);
+      });
+  }
+});
+
+document.getElementById('pageSize').addEventListener('change', () => {
+  currentPageSize = getPageSize();
+  validateSubmit();
+  if (lastResult && adminFile && suvidhaFile && columnsLoaded) {
+    setBusy(true);
+    requestPage(currentView, 1)
+      .then(data => {
+        lastResult = data;
+        currentData = data.data || [];
+        currentPagination = data.pagination || null;
+        renderStats(data.stats);
+        setTab(currentView);
+        renderTab(data, currentView);
+        renderPaginationControls(data.pagination);
+        setBusy(false);
+      })
+      .catch(e => {
+        setBusy(false);
+        if (e.name === 'AbortError') return;
+        showErr('Request failed: ' + e.message);
+      });
+  }
+});
+
 // ── submit ────────────────────────────────────────────────────────────────────
 document.getElementById('submitBtn').addEventListener('click', () => {
   if (fetching) return;
-  if (!adminFile || !suvidhaFile || !columnsLoaded || !document.getElementById('adminKey').value || !document.getElementById('suvidhaKey').value) {
-    showErr('Please upload both files and select both key columns first.');
+  if (!validateBeforeApiCall(true)) {
     return;
   }
   clearErr();
   setBusy(true);
-  if (compareAbort) compareAbort.abort();
-  compareAbort = new AbortController();
-  const fd = new FormData();
-  fd.append('admin_file',        adminFile);
-  fd.append('suvidha_file',      suvidhaFile);
-  fd.append('admin_key',         document.getElementById('adminKey').value);
-  fd.append('suvidha_key',       document.getElementById('suvidhaKey').value);
-  appendUploadParams(fd);
-
-  postForm('/reconcile', fd, compareAbort)
-    .then(async r => {
-      const ct = (r.headers.get('content-type') || '').toLowerCase();
-      if (!r.ok) {
-        const d = ct.includes('application/json') ? await r.json() : { error: await r.text() };
-        throw new Error(d.error || 'Reconciliation failed');
-      }
-      return r.json();
-    })
+  requestPage('disc', 1)
     .then(data => {
       lastResult = data;
+      currentData = data.data || [];
+      currentView = data.view || 'disc';
+      currentPage = data.pagination?.current_page || 1;
+      currentPagination = data.pagination || null;
       setBusy(false);
       renderStats(data.stats);
       activeTab = 'disc';
       setTab('disc');
       renderTab(data, 'disc');
+      renderPaginationControls(data.pagination);
       document.getElementById('dlBtn').disabled = false;
       document.getElementById('results').classList.add('show');
       setTimeout(() => document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
@@ -1325,8 +1648,7 @@ document.getElementById('submitBtn').addEventListener('click', () => {
 
 // ── download ──────────────────────────────────────────────────────────────────
 document.getElementById('dlBtn').addEventListener('click', () => {
-  if (!adminFile || !suvidhaFile || !columnsLoaded || !document.getElementById('adminKey').value || !document.getElementById('suvidhaKey').value) {
-    showErr('Please upload both files and select both key columns before downloading.');
+  if (!validateBeforeApiCall(true)) {
     return;
   }
   const dl = document.getElementById('dlBtn');
@@ -1334,12 +1656,7 @@ document.getElementById('dlBtn').addEventListener('click', () => {
   dl.textContent = 'Generating…';
   if (downloadAbort) downloadAbort.abort();
   downloadAbort = new AbortController();
-  const fd = new FormData();
-  fd.append('admin_file',        adminFile);
-  fd.append('suvidha_file',      suvidhaFile);
-  fd.append('admin_key',         document.getElementById('adminKey').value);
-  fd.append('suvidha_key',       document.getElementById('suvidhaKey').value);
-  appendUploadParams(fd);
+  const fd = buildRequestForm(currentView || 'disc', currentPage || 1, getPageSize());
 
   postForm('/api/download', fd, downloadAbort)
     .then(async r => {
@@ -1386,8 +1703,25 @@ document.getElementById('dlBtn').addEventListener('click', () => {
 document.querySelectorAll('.tab').forEach(t =>
   t.addEventListener('click', () => {
     if (!lastResult) return;
-    setTab(t.dataset.tab);
-    renderTab(lastResult, t.dataset.tab);
+    const nextTab = t.dataset.tab;
+    currentView = nextTab;
+    currentPage = 1;
+    setBusy(true);
+    requestPage(nextTab, 1)
+      .then(data => {
+        lastResult = data;
+        currentData = data.data || [];
+        currentPagination = data.pagination || null;
+        setBusy(false);
+        setTab(nextTab);
+        renderTab(data, nextTab);
+        renderPaginationControls(data.pagination);
+      })
+      .catch(e => {
+        setBusy(false);
+        if (e.name === 'AbortError') return;
+        showErr('Request failed: ' + e.message);
+      });
   })
 );
 
@@ -1414,18 +1748,18 @@ function renderStats(s) {
 // ── render tab content ────────────────────────────────────────────────────────
 function renderTab(r, tab) {
   const c = document.getElementById('tabContent');
-  const banner = r.meta && r.meta.json_truncated
-    ? `<div class="preview-loading" style="margin:0 0 12px;color:var(--warn)">⚠ Large result sets are truncated in the browser view. Use the Excel download for the full report.</div>`
+  const banner = (r.meta && r.meta.date_mode === 'strict')
+    ? `<div class="preview-loading" style="margin:0 0 12px;color:var(--accent)">Date mode: strict</div>`
     : '';
   c.innerHTML = '';
   if (tab === 'disc') c.innerHTML = banner + renderDisc(r);
-  if (tab === 'oa')   c.innerHTML = banner + renderOnly(r.only_admin_rows, r.admin_cols, 'oa-row');
-  if (tab === 'os')   c.innerHTML = banner + renderOnly(r.only_suv_rows,   r.suv_cols,   'os-row');
+  if (tab === 'oa')   c.innerHTML = banner + renderOnly(r.data || [], r.admin_cols, 'oa-row');
+  if (tab === 'os')   c.innerHTML = banner + renderOnly(r.data || [], r.suv_cols,   'os-row');
 }
 
 // ── discrepancies table ───────────────────────────────────────────────────────
 function renderDisc(r) {
-  const details = r.discrepancies || [];
+  const details = r.data || [];
   if (!details.length) {
     return `<div class="empty"><div class="ico">OK</div><strong>All clear</strong>All matched records are identical.</div>`;
   }
@@ -1481,13 +1815,14 @@ function renderDisc(r) {
     const adminRow = item.admin_row || {};
     const suvRow = item.suvidha || item.suv_row || {};
     const diffs = item.diffs || {};
+    const rowCount = item.count || 1;
 
     // build diff set
     const diffSet = new Set([...(item.diff_cols || []), ...(item.suv_diff_cols || [])]);
 
     // ── ADMIN ROW ──
     html += `<tr class="a-row">
-      <td><span class="badge-src a">Admin</span></td>
+      <td><span class="badge-src a">Admin${rowCount > 1 ? ` x${rowCount}` : ''}</span></td>
       ${columns.map(col => {
         const isDiff = diffSet.has(col) || unmappedAdminCols.has(col);
 
@@ -1506,7 +1841,7 @@ function renderDisc(r) {
 
     // ── SUVIDHA ROW (FIXED 🔥) ──
     html += `<tr class="s-row">
-      <td><span class="badge-src s">Suvidha</span></td>
+      <td><span class="badge-src s">Suvidha${rowCount > 1 ? ` x${rowCount}` : ''}</span></td>
       ${columns.map(col => {
         const isDiff = diffSet.has(col) || unmappedAdminCols.has(col);
         const val = getSuvValue(suvRow, col, diffs);
