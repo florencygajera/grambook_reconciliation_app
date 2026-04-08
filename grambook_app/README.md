@@ -19,6 +19,11 @@ python app.py
 
 Open: `http://localhost:5000`
 
+## Production Notes
+
+- Set `GRAMBOOK_SECRET_KEY` to the same value on every worker/process so CSRF tokens stay stable in multi-worker deployments.
+- The browser UI now truncates very large JSON result sets for safety. Use the Excel download for the full discrepancy report.
+
 ## OCR Support (Gujarati/Hindi/English)
 
 The backend now supports OCR fallback for `.xlsx` files that contain embedded image content.

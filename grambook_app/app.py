@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import csv
 import io
+import math
+import hashlib
 import json
 import logging
+import os
 import re
 import unicodedata
+import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -34,6 +38,7 @@ STATIC_DIR = BASE_DIR / "static"
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+app.config["SECRET_KEY"] = os.environ.get("GRAMBOOK_SECRET_KEY", "grambook-development-secret-key")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("grambook")
@@ -42,8 +47,23 @@ MAX_ROWS = 50_000
 PREVIEW_ROWS = 10
 HEADER_SEARCH_ROWS = 10
 HEADER_SEARCH_SPAN = 5
-# FIXED: lowered threshold so real-world government headers can still map.
-FUZZY_MATCH_THRESHOLD = 65
+# FIXED: unified relaxed threshold for noisy real-world government headers.
+FUZZY_MATCH_THRESHOLD = 58
+MAPPING_MIN_RATIO = 0.50
+MAPPING_MIN_WEIGHTED_CONFIDENCE = 60.0
+MAPPING_CORE_CONFIDENCE = 75.0
+KEY_NON_EMPTY_HARD_MIN = 0.60
+KEY_UNIQUE_HARD_MIN = 0.70
+KEY_BORDERLINE_MIN = 0.80
+NUMERIC_TOLERANCE = Decimal("0.005")
+
+CSRF_TOKEN = hashlib.sha256(f"{app.config['SECRET_KEY']}::csrf".encode("utf-8")).hexdigest()
+RESULT_CACHE: dict[str, dict[str, Any]] = {}
+RESULT_CACHE_ORDER: list[str] = []
+RESULT_CACHE_LIMIT = 16
+RESULT_CACHE_LOCK = threading.RLock()
+JSON_RESULT_LIMIT = 500
+JSON_ROW_LIMIT = 1000
 
 COLUMN_MISSING = "__COLUMN_MISSING__"
 VALUE_MISSING = "__VALUE_MISSING__"
@@ -53,6 +73,8 @@ CONTROL_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
 SPACE_RE = re.compile(r"\s+")
 COMPACT_RE = re.compile(r"[^\w]+", re.UNICODE)
 NUMERIC_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
+BOOLEAN_TRUE_TEXTS = {"true", "yes", "y", "on", "1"}
+BOOLEAN_FALSE_TEXTS = {"false", "no", "n", "off", "0"}
 
 DIGIT_TRANSLATION = str.maketrans(
     {
@@ -147,6 +169,8 @@ def _clean_text(value: Any) -> str:
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
     if isinstance(value, float):
+        if not math.isfinite(value):
+            return ""
         if value.is_integer():
             return str(int(value))
         text = f"{value:.15f}".rstrip("0").rstrip(".")
@@ -185,7 +209,7 @@ def _normalize_for_compare(value: Any) -> str:
 
 
 def _normalize_for_match(value: Any) -> str:
-    text = _normalize_for_compare(value)
+    text = _clean_text(value)
     if not text:
         return ""
     text = _normalize_gujarati_terms(text)
@@ -222,6 +246,65 @@ def _numeric_text(value: Any) -> Decimal | None:
     return num
 
 
+def _boolean_text(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    text = _normalize_for_compare(value)
+    if text in BOOLEAN_TRUE_TEXTS:
+        return True
+    if text in BOOLEAN_FALSE_TEXTS:
+        return False
+    return None
+
+
+def _date_text(value: Any) -> str | None:
+    text = _clean_text(value)
+    if not text:
+        return None
+    if isinstance(value, (date, datetime)):
+        return value.date().isoformat() if isinstance(value, datetime) else value.isoformat()
+    candidate = _normalize_for_compare(text)
+    candidate = candidate.replace(".", "/").replace("-", "/")
+    if not re.fullmatch(r"\d{1,4}/\d{1,2}/\d{1,4}", candidate):
+        return None
+    parts = [p for p in candidate.split("/") if p]
+    if len(parts) != 3:
+        return None
+    if len(parts[0]) == 4:
+        try:
+            dt = datetime.strptime(candidate, "%Y/%m/%d")
+            return dt.date().isoformat()
+        except ValueError:
+            return None
+
+    day, month, year = parts
+    if len(day) <= 2 and len(month) <= 2:
+        day_i = int(day)
+        month_i = int(month)
+        if day_i > 12 and month_i <= 12:
+            try:
+                dt = datetime.strptime(candidate, "%d/%m/%Y")
+                return dt.date().isoformat()
+            except ValueError:
+                return None
+        if month_i > 12 and day_i <= 12:
+            try:
+                dt = datetime.strptime(candidate, "%m/%d/%Y")
+                return dt.date().isoformat()
+            except ValueError:
+                return None
+        # Ambiguous day/month values are left as text to avoid silent false matches.
+        return None
+
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%m/%d/%Y", "%m/%d/%y"):
+        try:
+            dt = datetime.strptime(candidate, fmt)
+            return dt.date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
 def _values_equal(left: Any, right: Any) -> bool:
     left_text = _normalize_for_compare(left)
     right_text = _normalize_for_compare(right)
@@ -229,11 +312,22 @@ def _values_equal(left: Any, right: Any) -> bool:
         return True
     if (left_text == "") != (right_text == ""):
         return False
+    left_bool = _boolean_text(left)
+    right_bool = _boolean_text(right)
+    if left_bool is not None and right_bool is not None:
+        left_is_explicit_bool = isinstance(left, bool) or left_text in BOOLEAN_TRUE_TEXTS or left_text in BOOLEAN_FALSE_TEXTS
+        right_is_explicit_bool = isinstance(right, bool) or right_text in BOOLEAN_TRUE_TEXTS or right_text in BOOLEAN_FALSE_TEXTS
+        if left_is_explicit_bool or right_is_explicit_bool:
+            return left_bool == right_bool
+    left_date = _date_text(left)
+    right_date = _date_text(right)
+    if left_date is not None and right_date is not None:
+        return left_date == right_date
     left_num = _numeric_text(left)
     right_num = _numeric_text(right)
     if left_num is not None and right_num is not None:
-        # FIXED: numeric comparison uses a small tolerance for Excel rendering noise.
-        return abs(left_num - right_num) < Decimal("0.01")
+        # FIXED: numeric comparison uses a tighter tolerance to avoid false positives.
+        return abs(left_num - right_num) < NUMERIC_TOLERANCE
     if (left_num is None) != (right_num is None):
         return False
     return left_text == right_text
@@ -347,18 +441,35 @@ def _parse_xls_matrix(file_bytes: bytes) -> tuple[list[list[str]], list[int]]:
 
 def _parse_xlsx_matrix(file_bytes: bytes) -> tuple[list[list[str]], list[int]]:
     try:
-        wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+        wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=False)
         ws = wb.worksheets[0]
     except Exception as exc:
         raise ReconciliationError(f"Unable to read .xlsx workbook: {exc}") from exc
+    merged_map: dict[str, str] = {}
+    merged_cells = getattr(ws, "merged_cells", None)
+    if merged_cells is not None:
+        for merged_range in merged_cells.ranges:
+            min_col, min_row, max_col, max_row = merged_range.bounds
+            top_left = ws.cell(min_row, min_col).value
+            if top_left is None:
+                continue
+            cleaned = _clean_text(top_left)
+            for row in range(min_row, max_row + 1):
+                for col in range(min_col, max_col + 1):
+                    merged_map[f"{row}:{col}"] = cleaned
     matrix: list[list[str]] = []
     row_numbers: list[int] = []
     for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
-        display_row = [_clean_text(cell) for cell in row]
+        display_row: list[str] = []
+        for col_idx, cell in enumerate(row, start=1):
+            if cell is None:
+                cell = merged_map.get(f"{row_idx}:{col_idx}", "")
+            display_row.append(_clean_text(cell))
         if any(_normalize_for_compare(cell) for cell in display_row):
             matrix.append(display_row)
             row_numbers.append(row_idx)
     matrix = _normalize_matrix_width(matrix)
+    wb.close()
     return matrix, row_numbers
 
 
@@ -401,11 +512,12 @@ def _build_header_names(matrix: list[list[str]], start: int, span: int) -> list[
         if not raw:
             raw = f"Column {c + 1}"
         base = raw
-        if base in seen:
-            seen[base] += 1
-            raw = f"{base}_{seen[base]}"
+        seen_key = _normalize_for_compare(base) or base.casefold()
+        if seen_key in seen:
+            seen[seen_key] += 1
+            raw = f"{base}_{seen[seen_key]}"
         else:
-            seen[base] = 1
+            seen[seen_key] = 1
         names.append(raw)
     return names
 
@@ -417,12 +529,17 @@ def _header_score(start: int, span: int, names: list[str]) -> float:
     unique_norm = set()
     alpha_cells = 0
     token_hits = 0
+    numeric_penalty = 0.0
     for name in names:
         norm = _normalize_header_compact(name)
         if norm and not norm.startswith("column"):
             non_blank += 1
             unique_norm.add(norm)
             tokens = _tokenize_for_match(name)
+            digit_count = sum(ch.isdigit() for ch in name)
+            letter_count = sum(ch.isalpha() for ch in name)
+            if digit_count and digit_count >= letter_count:
+                numeric_penalty += 1.5
             if re.search(r"[^\W\d_]", name, flags=re.UNICODE):
                 alpha_cells += 1
             if any(token in norm for token in ("gs", "id", "નં", "નંબ", "કોડ", "ક્રમ", "સરનામું", "વેરા")):
@@ -431,6 +548,7 @@ def _header_score(start: int, span: int, names: list[str]) -> float:
                 token_hits += 1
     duplicate_penalty = len(names) - len(unique_norm)
     score = (non_blank * 4.0) + (len(unique_norm) * 2.5) + (alpha_cells * 1.5)
+    score -= numeric_penalty * 2.0
     # FIXED: stable bonuses for common government header terms.
     score += sum(
         3.0
@@ -441,6 +559,8 @@ def _header_score(start: int, span: int, names: list[str]) -> float:
     score -= duplicate_penalty * 2.0
     score -= start * 0.25
     score += span * 0.75
+    if non_blank < max(1, len(names) // 2):
+        score -= 5.0
     return score
 
 
@@ -543,10 +663,65 @@ def _parse_manual_mappings(value: str | None) -> dict[str, str]:
     try:
         data = json.loads(value)
     except json.JSONDecodeError:
-        return {}
+        raise ReconciliationError("Manual mappings must be valid JSON.")
     if not isinstance(data, dict):
-        return {}
+        raise ReconciliationError("Manual mappings must be a JSON object.")
     return {str(k): str(v) for k, v in data.items() if str(k).strip() and str(v).strip()}
+
+
+def _csrf_check() -> None:
+    token = request.headers.get("X-Grambook-CSRF", "")
+    if token != CSRF_TOKEN:
+        raise ReconciliationError("Security token mismatch. Refresh the page and try again.")
+
+
+def _request_fingerprint(
+    admin_upload,
+    suv_upload,
+    admin_header_row: int | None,
+    admin_header_span: int | None,
+    suv_header_row: int | None,
+    suv_header_span: int | None,
+    admin_key: str | None,
+    suv_key: str | None,
+    manual_mappings_raw: str | None = None,
+) -> str:
+    admin_bytes, admin_name = _file_bytes(admin_upload)
+    suv_bytes, suv_name = _file_bytes(suv_upload)
+    payload = {
+        "admin": hashlib.sha256(admin_bytes).hexdigest(),
+        "suv": hashlib.sha256(suv_bytes).hexdigest(),
+        "admin_name": admin_name,
+        "suv_name": suv_name,
+        "admin_header_row": admin_header_row,
+        "admin_header_span": admin_header_span,
+        "suv_header_row": suv_header_row,
+        "suv_header_span": suv_header_span,
+        "admin_key": _clean_text(admin_key),
+        "suv_key": _clean_text(suv_key),
+        "manual_mappings": manual_mappings_raw or "",
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def _cache_result(cache_key: str, result: dict[str, Any]) -> None:
+    with RESULT_CACHE_LOCK:
+        RESULT_CACHE[cache_key] = result
+        RESULT_CACHE_ORDER[:] = [k for k in RESULT_CACHE_ORDER if k != cache_key]
+        RESULT_CACHE_ORDER.append(cache_key)
+        while len(RESULT_CACHE_ORDER) > RESULT_CACHE_LIMIT:
+            old_key = RESULT_CACHE_ORDER.pop(0)
+            RESULT_CACHE.pop(old_key, None)
+
+
+def _lookup_cached_result(cache_key: str) -> dict[str, Any] | None:
+    with RESULT_CACHE_LOCK:
+        result = RESULT_CACHE.get(cache_key)
+        if result is None:
+            return None
+        RESULT_CACHE_ORDER[:] = [k for k in RESULT_CACHE_ORDER if k != cache_key]
+        RESULT_CACHE_ORDER.append(cache_key)
+        return result
 
 
 def _resolve_key_column(selected_key: str | None, dataset: ParsedDataset) -> str:
@@ -568,7 +743,7 @@ def _resolve_key_column(selected_key: str | None, dataset: ParsedDataset) -> str
 def _auto_detect_key_column(dataset: ParsedDataset) -> str:
     best_col = dataset.columns[0]
     best_score = -10**9
-    sample_rows = dataset.normalized_rows[: min(len(dataset.normalized_rows), 500)]
+    sample_rows = dataset.normalized_rows
     for col in dataset.columns:
         values = [row.get(col, "") for row in sample_rows]
         non_empty = [v for v in values if v]
@@ -591,7 +766,7 @@ def _auto_detect_key_column(dataset: ParsedDataset) -> str:
 
 def _key_quality_candidates(dataset: ParsedDataset, limit: int = 3) -> list[str]:
     scored: list[tuple[float, str]] = []
-    sample_rows = dataset.normalized_rows[: min(len(dataset.normalized_rows), 500)]
+    sample_rows = dataset.normalized_rows
     for col in dataset.columns:
         values = [row.get(col, "") for row in sample_rows]
         non_empty = [v for v in values if v]
@@ -630,12 +805,19 @@ def _key_quality_metrics(dataset: ParsedDataset, key_col: str) -> dict[str, Any]
 
 def _validate_key_quality(dataset: ParsedDataset, key_col: str, label: str) -> dict[str, Any]:
     metrics = _key_quality_metrics(dataset, key_col)
-    if metrics["non_empty_ratio"] < 0.9 or metrics["unique_ratio"] < 0.8:
+    metrics["warning"] = False
+    if metrics["non_empty_ratio"] < KEY_NON_EMPTY_HARD_MIN or metrics["unique_ratio"] < KEY_UNIQUE_HARD_MIN:
         suggestions = _key_quality_candidates(dataset)
         suggestion_text = ", ".join(suggestions) if suggestions else "no strong fallback key found"
         raise ReconciliationError(
             f"{label} key column '{key_col}' is too weak (non-empty {metrics['non_empty_ratio']:.0%}, unique {metrics['unique_ratio']:.0%}). "
             f"Suggested keys: {suggestion_text}."
+        )
+    if metrics["non_empty_ratio"] < KEY_BORDERLINE_MIN or metrics["unique_ratio"] < 0.85:
+        metrics["warning"] = True
+        metrics["warning_message"] = (
+            f"{label} key '{key_col}' is borderline (non-empty {metrics['non_empty_ratio']:.0%}, "
+            f"unique {metrics['unique_ratio']:.0%})."
         )
     return metrics
 
@@ -736,9 +918,24 @@ def _build_column_mapping(
     unmapped_admin = [c for c in admin.columns if c not in admin_used]
     unmapped_suv = [c for c in suv.columns if c not in suv_used]
     mapped_count = len(pairs)
-    mapped_ratio = mapped_count / max(len(admin.columns), len(suv.columns), 1)
-    avg_confidence = sum(p["confidence"] for p in pairs) / mapped_count if mapped_count else 0.0
-    if mapped_count == 0 or mapped_ratio < 0.5 or avg_confidence < 62.0:
+    mapped_ratio = mapped_count / max(min(len(admin.columns), len(suv.columns)), 1)
+    weighted_total = 0.0
+    weighted_weight = 0.0
+    core_mapped = False
+    for pair in pairs:
+        group = _guess_group(pair["admin_col"])
+        if group == "Identifier":
+            weight = 3.0
+            if pair["confidence"] >= MAPPING_CORE_CONFIDENCE:
+                core_mapped = True
+        elif group in {"Amount", "Date"}:
+            weight = 2.0
+        else:
+            weight = 1.0
+        weighted_total += pair["confidence"] * weight
+        weighted_weight += weight
+    weighted_confidence = weighted_total / weighted_weight if weighted_weight else 0.0
+    if mapped_count == 0 or mapped_ratio < MAPPING_MIN_RATIO or (not core_mapped and weighted_confidence < MAPPING_MIN_WEIGHTED_CONFIDENCE):
         raise ReconciliationError(
             "Column mapping confidence is too low. Please verify the header rows, spans, and selected key columns."
         )
@@ -770,12 +967,10 @@ def _build_records(dataset: ParsedDataset, key_col: str) -> list[RowRecord]:
 
 
 def _normalize_key_value(value: Any) -> str:
-    text = _clean_text(value)
+    text = _normalize_for_compare(value)
     if not text:
         return ""
     # FIXED: preserve separators so 12-34, 1/234, and 1234 remain distinct keys.
-    text = _normalize_gujarati_terms(text)
-    text = unicodedata.normalize("NFKC", text)
     return SPACE_RE.sub(" ", text).casefold().strip()
 
 
@@ -801,16 +996,38 @@ def _pair_groups(
         grouped_suv[rec.key_norm].append(rec)
 
     for key in sorted(set(grouped_admin) | set(grouped_suv)):
-        # FIXED: deterministic pairing based on key order, then source row number.
         a_list = sorted(grouped_admin.get(key, []), key=lambda r: (r.row_number, r.index))
         s_list = sorted(grouped_suv.get(key, []), key=lambda r: (r.row_number, r.index))
-        pair_count = min(len(a_list), len(s_list))
+        exact_admin: dict[str, list[RowRecord]] = defaultdict(list)
+        exact_suv: dict[str, list[RowRecord]] = defaultdict(list)
+        for rec in a_list:
+            exact_admin[rec.fingerprint].append(rec)
+        for rec in s_list:
+            exact_suv[rec.fingerprint].append(rec)
+
+        matched_admin_ids: set[int] = set()
+        matched_suv_ids: set[int] = set()
+        for fingerprint in sorted(set(exact_admin) & set(exact_suv)):
+            admin_bucket = exact_admin[fingerprint]
+            suv_bucket = exact_suv[fingerprint]
+            pair_count = min(len(admin_bucket), len(suv_bucket))
+            for i in range(pair_count):
+                a_rec = admin_bucket[i]
+                s_rec = suv_bucket[i]
+                paired.append((a_rec, s_rec))
+                matched_admin_ids.add(id(a_rec))
+                matched_suv_ids.add(id(s_rec))
+
+        remaining_admin = [rec for rec in a_list if id(rec) not in matched_admin_ids]
+        remaining_suv = [rec for rec in s_list if id(rec) not in matched_suv_ids]
+
+        pair_count = min(len(remaining_admin), len(remaining_suv))
         for i in range(pair_count):
-            paired.append((a_list[i], s_list[i]))
-        if len(a_list) > pair_count:
-            only_admin.extend(a_list[pair_count:])
-        if len(s_list) > pair_count:
-            only_suv.extend(s_list[pair_count:])
+            paired.append((remaining_admin[i], remaining_suv[i]))
+        if len(remaining_admin) > pair_count:
+            only_admin.extend(remaining_admin[pair_count:])
+        if len(remaining_suv) > pair_count:
+            only_suv.extend(remaining_suv[pair_count:])
 
     paired.sort(key=lambda p: (p[0].key_norm, p[0].row_number, p[1].row_number))
     only_admin.sort(key=lambda r: (r.row_number, r.index))
@@ -829,20 +1046,23 @@ def _compare_pair(
     diffs: dict[str, dict[str, Any]] = {}
     diff_cols: list[str] = []
 
-    # FIXED: unmapped columns are reported in metadata, not treated as mismatches.
     for admin_col in admin.columns:
         suv_col = column_map.get(admin_col)
         admin_val = admin_rec.row.get(admin_col, "")
         if suv_col is None:
+            diffs[admin_col] = {"admin": admin_val, "suvidha": COLUMN_MISSING, "type": "missing_column"}
+            diff_cols.append(admin_col)
             continue
         suv_val = suv_rec.row.get(suv_col, "")
         if not _values_equal(admin_val, suv_val):
             diffs[admin_col] = {"admin": admin_val, "suvidha": suv_val, "type": "value"}
             diff_cols.append(admin_col)
 
-    # FIXED: unmapped Suvidha columns are tracked in metadata, not emitted as row diffs.
+    for suv_col in unmapped_suv:
+        key = f"[SUV] {suv_col}"
+        diffs[key] = {"admin": COLUMN_MISSING, "suvidha": suv_rec.row.get(suv_col, ""), "type": "extra_column"}
 
-    if not diff_cols:
+    if not diff_cols and not unmapped_suv:
         return None
 
     return {
@@ -855,6 +1075,7 @@ def _compare_pair(
         "suv_row": suv_rec.row,
         "diffs": diffs,
         "diff_cols": diff_cols,
+        "suv_diff_cols": [f"SUV::{col}" for col in unmapped_suv],
         "key_missing": admin_rec.key_missing or suv_rec.key_missing,
     }
 
@@ -872,6 +1093,10 @@ def reconcile(
 
     admin_key_quality = _validate_key_quality(admin, admin_key_col, "Admin")
     suv_key_quality = _validate_key_quality(suv, suv_key_col, "Suvidha")
+    if admin_key_quality.get("warning"):
+        logger.warning(admin_key_quality.get("warning_message"))
+    if suv_key_quality.get("warning"):
+        logger.warning(suv_key_quality.get("warning_message"))
 
     col_pairs, column_map, unmapped_admin, unmapped_suv = _build_column_mapping(admin, suv, manual_mappings)
     logger.info("Unmapped admin columns: %s", unmapped_admin)
@@ -923,7 +1148,26 @@ def reconcile(
         for record in only_suv_records
     ]
 
+    mapped_ratio = len(col_pairs) / max(len(admin.columns), len(suv.columns), 1)
+    weighted_total = 0.0
+    weighted_weight = 0.0
+    core_mapped = False
+    for pair in col_pairs:
+        group = _guess_group(pair["admin_col"])
+        if group == "Identifier":
+            weight = 3.0
+            if pair["confidence"] >= MAPPING_CORE_CONFIDENCE:
+                core_mapped = True
+        elif group in {"Amount", "Date"}:
+            weight = 2.0
+        else:
+            weight = 1.0
+        weighted_total += pair["confidence"] * weight
+        weighted_weight += weight
+    weighted_confidence = weighted_total / weighted_weight if weighted_weight else 0.0
+
     total_groups = len(paired) + len(only_admin_records) + len(only_suv_records)
+    total_rows = len(admin_records) + len(suv_records)
     logger.info(
         "Comparison complete: total=%s matched=%s mismatched=%s only_admin=%s only_suv=%s",
         total_groups,
@@ -947,13 +1191,16 @@ def reconcile(
         "suv_col_meta": suv.column_meta,
         "unmapped": {"admin_cols": unmapped_admin, "suv_cols": unmapped_suv},
         "stats": {
-            "total": total_groups,
+            "total": total_rows,
+            "groups": total_groups,
             "matched": matched_pairs,
             "mismatched": mismatched_pairs,
             "disc": mismatched_pairs,
             "only_a": len(only_admin_records),
             "only_s": len(only_suv_records),
             "compared": matched_pairs + mismatched_pairs,
+            "missing_admin_keys": admin_missing_keys,
+            "missing_suv_keys": suv_missing_keys,
         },
         "meta": {
             "admin_key_auto": admin_key_col == _auto_detect_key_column(admin),
@@ -968,6 +1215,11 @@ def reconcile(
             "missing_key_counts": {
                 "admin": admin_missing_keys,
                 "suvidha": suv_missing_keys,
+            },
+            "mapping_quality": {
+                "mapped_ratio": round(mapped_ratio, 4),
+                "weighted_confidence": round(weighted_confidence, 4),
+                "core_mapped": core_mapped,
             },
         },
     }
@@ -1018,11 +1270,15 @@ def generate_discrepancy_report(
         ("Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         ("Admin Key", result.get("admin_key", "")),
         ("Suvidha Key", result.get("suv_key", "")),
-        ("Total Groups", result["stats"]["total"]),
+        ("Total Rows", result["stats"]["total"]),
+        ("Total Groups", result["stats"].get("groups", "")),
         ("Matched", result["stats"]["matched"]),
         ("Mismatched", result["stats"]["mismatched"]),
         ("Only in Admin", result["stats"]["only_a"]),
         ("Only in Suvidha", result["stats"]["only_s"]),
+        ("Missing Admin Keys", result["stats"].get("missing_admin_keys", "")),
+        ("Missing Suvidha Keys", result["stats"].get("missing_suv_keys", "")),
+        ("Mapping Confidence", result.get("meta", {}).get("mapping_quality", {}).get("weighted_confidence", "")),
     ]
     for row_idx, (label, value) in enumerate(summary_rows, start=1):
         ws_summary.cell(row=row_idx, column=1, value=label)
@@ -1068,16 +1324,17 @@ def generate_discrepancy_report(
         _style_cell(ws_disc.cell(row=row_ptr, column=3), fill=styles["admin_fill"], border=styles["border"])
         for i, col in enumerate(admin_cols, start=4):
             value = admin_row.get(col, "")
+            suv_col = suv_lookup.get(col)
             cell = ws_disc.cell(row=row_ptr, column=i, value=value)
-            if col in diff_cols:
+            if col in diff_cols or suv_col is None:
                 _style_cell(cell, fill=styles["mismatch_fill_admin"], font=styles["bold_font"], border=styles["border"], wrap=True)
             else:
                 _style_cell(cell, fill=styles["admin_fill"], border=styles["border"], wrap=True)
         for j, col in enumerate(extra_suv_cols, start=4 + len(admin_cols)):
             label = f"[SUV] {col}"
-            value = diffs.get(label, {}).get("suvidha", "")
-            cell = ws_disc.cell(row=row_ptr, column=j, value="" if value == COLUMN_MISSING else value)
-            _style_cell(cell, fill=styles["admin_fill"], border=styles["border"], wrap=True)
+            value = diffs.get(label, {}).get("suvidha", suv_row.get(col, ""))
+            cell = ws_disc.cell(row=row_ptr, column=j, value="COLUMN NOT FOUND" if value == COLUMN_MISSING else value)
+            _style_cell(cell, fill=styles["mismatch_fill_admin"], font=styles["bold_font"], border=styles["border"], wrap=True)
         row_ptr += 1
 
         ws_disc.cell(row=row_ptr, column=1, value="Suvidha")
@@ -1088,11 +1345,11 @@ def generate_discrepancy_report(
         _style_cell(ws_disc.cell(row=row_ptr, column=3), fill=styles["suv_fill"], border=styles["border"])
         for i, col in enumerate(admin_cols, start=4):
             suv_col = suv_lookup.get(col)
-            value = suv_row.get(suv_col, "") if suv_col else diffs.get(col, {}).get("suvidha", "")
+            value = suv_row.get(suv_col, "") if suv_col else COLUMN_MISSING
             if value == COLUMN_MISSING:
                 value = "COLUMN NOT FOUND"
             cell = ws_disc.cell(row=row_ptr, column=i, value=value)
-            if col in diff_cols:
+            if col in diff_cols or suv_col is None:
                 _style_cell(cell, fill=styles["mismatch_fill_suv"], font=styles["bold_font"], border=styles["border"], wrap=True)
             else:
                 _style_cell(cell, fill=styles["suv_fill"], border=styles["border"], wrap=True)
@@ -1134,11 +1391,24 @@ def generate_discrepancy_report(
 
 
 def _json_response(result: dict[str, Any]) -> dict[str, Any]:
+    discrepancies = result.get("discrepancies", [])
+    only_admin_rows = result.get("only_admin_rows", [])
+    only_suv_rows = result.get("only_suv_rows", [])
+    truncated = False
+    if len(discrepancies) > JSON_RESULT_LIMIT:
+        discrepancies = discrepancies[:JSON_RESULT_LIMIT]
+        truncated = True
+    if len(only_admin_rows) > JSON_ROW_LIMIT:
+        only_admin_rows = only_admin_rows[:JSON_ROW_LIMIT]
+        truncated = True
+    if len(only_suv_rows) > JSON_ROW_LIMIT:
+        only_suv_rows = only_suv_rows[:JSON_ROW_LIMIT]
+        truncated = True
     return {
-        "discrepancies": result.get("discrepancies", []),
-        "only_admin_rows": result.get("only_admin_rows", []),
-        "only_suv_rows": result.get("only_suv_rows", []),
-        "only_suvidha_rows": result.get("only_suv_rows", []),
+        "discrepancies": discrepancies,
+        "only_admin_rows": only_admin_rows,
+        "only_suv_rows": only_suv_rows,
+        "only_suvidha_rows": only_suv_rows,
         "stats": result.get("stats", {}),
         "matching_records": result.get("stats", {}).get("matched", 0),
         "mismatched_records": result.get("stats", {}).get("mismatched", 0),
@@ -1149,7 +1419,7 @@ def _json_response(result: dict[str, Any]) -> dict[str, Any]:
         "suv_cols": result.get("suv_cols", []),
         "admin_col_meta": result.get("admin_col_meta", []),
         "suv_col_meta": result.get("suv_col_meta", []),
-        "meta": result.get("meta", {}),
+        "meta": {**result.get("meta", {}), "json_truncated": truncated},
     }
 
 
@@ -1158,8 +1428,14 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
+@app.route("/api/csrf", methods=["GET"])
+def api_csrf():
+    return jsonify({"token": CSRF_TOKEN})
+
+
 @app.route("/api/columns", methods=["POST"])
 def api_columns():
+    _csrf_check()
     admin_upload = request.files.get("admin_file")
     suv_upload = request.files.get("suvidha_file")
     if not admin_upload or not suv_upload:
@@ -1205,6 +1481,7 @@ def api_columns():
 
 @app.route("/api/header-preview", methods=["POST"])
 def api_header_preview():
+    _csrf_check()
     upload = request.files.get("file")
     if not upload:
         return jsonify({"error": "File is required."}), 400
@@ -1236,10 +1513,22 @@ def api_header_preview():
 @app.route("/api/reconcile", methods=["POST"])
 def api_reconcile():
     try:
+        _csrf_check()
         admin_upload = request.files.get("admin_file")
         suv_upload = request.files.get("suvidha_file")
         if not admin_upload or not suv_upload:
             return jsonify({"error": "Both files are required."}), 400
+        cache_key = _request_fingerprint(
+            admin_upload,
+            suv_upload,
+            _parse_optional_int(request.form.get("admin_header_row")),
+            _parse_optional_int(request.form.get("admin_header_span")),
+            _parse_optional_int(request.form.get("suvidha_header_row") or request.form.get("suv_header_row")),
+            _parse_optional_int(request.form.get("suvidha_header_span") or request.form.get("suv_header_span")),
+            request.form.get("admin_key"),
+            request.form.get("suv_key") or request.form.get("suvidha_key"),
+            request.form.get("manual_mappings"),
+        )
         admin = parse_uploaded_dataset(
             admin_upload,
             _parse_optional_int(request.form.get("admin_header_row")),
@@ -1257,6 +1546,7 @@ def api_reconcile():
             request.form.get("suv_key") or request.form.get("suvidha_key"),
             _parse_manual_mappings(request.form.get("manual_mappings")),
         )
+        _cache_result(cache_key, result)
         return jsonify(_json_response(result))
     except ReconciliationError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -1268,10 +1558,22 @@ def api_reconcile():
 @app.route("/api/download", methods=["POST"])
 def api_download():
     try:
+        _csrf_check()
         admin_upload = request.files.get("admin_file")
         suv_upload = request.files.get("suvidha_file")
         if not admin_upload or not suv_upload:
             return jsonify({"error": "Both files are required."}), 400
+        cache_key = _request_fingerprint(
+            admin_upload,
+            suv_upload,
+            _parse_optional_int(request.form.get("admin_header_row")),
+            _parse_optional_int(request.form.get("admin_header_span")),
+            _parse_optional_int(request.form.get("suvidha_header_row") or request.form.get("suv_header_row")),
+            _parse_optional_int(request.form.get("suvidha_header_span") or request.form.get("suv_header_span")),
+            request.form.get("admin_key"),
+            request.form.get("suv_key") or request.form.get("suvidha_key"),
+            request.form.get("manual_mappings"),
+        )
         admin = parse_uploaded_dataset(
             admin_upload,
             _parse_optional_int(request.form.get("admin_header_row")),
@@ -1282,13 +1584,16 @@ def api_download():
             _parse_optional_int(request.form.get("suvidha_header_row") or request.form.get("suv_header_row")),
             _parse_optional_int(request.form.get("suvidha_header_span") or request.form.get("suv_header_span")),
         )
-        result = reconcile(
-            admin,
-            suv,
-            request.form.get("admin_key"),
-            request.form.get("suv_key") or request.form.get("suvidha_key"),
-            _parse_manual_mappings(request.form.get("manual_mappings")),
-        )
+        result = _lookup_cached_result(cache_key)
+        if result is None:
+            result = reconcile(
+                admin,
+                suv,
+                request.form.get("admin_key"),
+                request.form.get("suv_key") or request.form.get("suvidha_key"),
+                _parse_manual_mappings(request.form.get("manual_mappings")),
+            )
+            _cache_result(cache_key, result)
         buf = generate_discrepancy_report(admin, suv, result)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return send_file(

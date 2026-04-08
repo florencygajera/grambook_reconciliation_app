@@ -939,6 +939,12 @@ let previewAbort = { admin: null, suvidha: null };
 let compareAbort = null;
 let downloadAbort = null;
 let columnsLoaded = false;
+let csrfToken = '';
+const REQUEST_TIMEOUT_MS = 90000;
+const csrfReady = fetch('/api/csrf')
+  .then(r => r.json())
+  .then(data => { csrfToken = data.token || ''; })
+  .catch(() => { csrfToken = ''; });
 
 // ── file pickers ──────────────────────────────────────────────────────────────
 function setupPicker(inputId, cardId, nameId, readyId, which) {
@@ -1015,6 +1021,27 @@ function appendUploadParams(fd) {
   fd.append('suvidha_header_span', p.suvidha_header_span);
 }
 
+async function postForm(url, fd, controller) {
+  await csrfReady;
+  const activeController = controller || new AbortController();
+  if (activeController.signal && activeController.signal.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+  activeController.__timedOut = false;
+  const timeoutId = REQUEST_TIMEOUT_MS > 0 ? setTimeout(() => {
+    activeController.__timedOut = true;
+    activeController.abort();
+  }, REQUEST_TIMEOUT_MS) : null;
+  return fetch(url, {
+    method: 'POST',
+    body: fd,
+    signal: activeController.signal,
+    headers: { 'X-Grambook-CSRF': csrfToken },
+  }).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+}
+
 function setBusy(on) {
   fetching = on;
   const btn = document.getElementById('submitBtn');
@@ -1065,7 +1092,7 @@ function fetchPreview(which) {
   fd.append('header_row',  document.getElementById(hrParam).value);
   fd.append('header_span', document.getElementById(hsParam).value);
 
-  fetch('/api/header-preview', { method: 'POST', body: fd, signal: controller.signal })
+  postForm('/api/header-preview', fd, controller)
     .then(r => r.json())
     .then(data => {
       if (reqId !== previewReqSeq[which]) return;
@@ -1118,7 +1145,14 @@ function fetchPreview(which) {
       tblEl.innerHTML = html;
     })
     .catch(e => {
-      if (e.name === 'AbortError') return;
+      if (e.name === 'AbortError') {
+        if (controller.__timedOut) {
+          loadEl.style.display = 'none';
+          tblEl.style.display = 'block';
+          tblEl.innerHTML = `<div class="preview-loading" style="color:var(--warn)">⚠ Preview timed out.</div>`;
+        }
+        return;
+      }
       if (reqId !== previewReqSeq[which]) return;
       loadEl.style.display = 'none';
       tblEl.style.display  = 'block';
@@ -1148,7 +1182,7 @@ function checkBothUploaded() {
   fd.append('suvidha_file',      suvidhaFile);
   appendUploadParams(fd);
 
-  fetch('/api/columns', { method: 'POST', body: fd, signal: columnsAbort.signal })
+  postForm('/api/columns', fd, columnsAbort)
     .then(r => r.json())
     .then(data => {
       if (reqId !== columnsReqSeq) return;
@@ -1163,7 +1197,12 @@ function checkBothUploaded() {
       fetchPreview('suvidha');
     })
     .catch(e => {
-        if (e.name === 'AbortError') return;
+        if (e.name === 'AbortError') {
+          if (columnsAbort && columnsAbort.__timedOut) {
+            showErr('Loading columns timed out. Please try again.');
+          }
+          return;
+        }
         if (reqId !== columnsReqSeq) return;
         showErr('Could not read columns: ' + e);
         document.getElementById('submitBtn').disabled = true;
@@ -1184,13 +1223,15 @@ function populateSel(selId, cols, pref, colMeta) {
   const sel = document.getElementById(selId);
   const metaByCol = {};
   (colMeta || []).forEach(m => { if (m && m.column) metaByCol[m.column] = m; });
+  const prefList = Array.isArray(pref) ? pref.map(v => String(v).toLowerCase()) : [];
 
   const groups = {};
   cols.forEach(c => {
     const m = metaByCol[c] || {};
     const group = (m.group && m.group !== 'Other') ? m.group : 'Other';
     if (!groups[group]) groups[group] = [];
-    groups[group].push({ value: c, label: group === 'Other' ? c : group });
+    const preferred = prefList.some(token => String(c).toLowerCase().includes(token));
+    groups[group].push({ value: c, label: c, preferred });
   });
 
   const groupNames = Object.keys(groups).sort((a, b) => {
@@ -1201,15 +1242,20 @@ function populateSel(selId, cols, pref, colMeta) {
 
   let html = '<option value="" selected disabled>Select key column</option>';
   groupNames.forEach(g => {
-    const opts = groups[g].map((item, idx) => {
-      const label = (g === 'Other') ? item.label
-        : (groups[g].length > 1 ? `${item.label} ${idx + 1}` : item.label);
+    const ordered = groups[g].slice().sort((a, b) => Number(b.preferred) - Number(a.preferred) || a.label.localeCompare(b.label));
+    const opts = ordered.map((item, idx) => {
+      const label = item.label;
       return `<option value="${esc(item.value)}">${esc(label)}</option>`;
     }).join('');
     html += g === 'Other' ? opts : `<optgroup label="${esc(g)}">${opts}</optgroup>`;
   });
 
   sel.innerHTML = html;
+  const preferredOption = groups.Other?.find(item => item.preferred)
+    || Object.values(groups).flat().find(item => item.preferred);
+  if (preferredOption) {
+    sel.value = preferredOption.value;
+  }
 }
 
 // Re-fetch columns when header settings change
@@ -1243,7 +1289,7 @@ document.getElementById('submitBtn').addEventListener('click', () => {
   fd.append('suvidha_key',       document.getElementById('suvidhaKey').value);
   appendUploadParams(fd);
 
-  fetch('/reconcile', { method: 'POST', body: fd, signal: compareAbort.signal })
+  postForm('/reconcile', fd, compareAbort)
     .then(async r => {
       const ct = (r.headers.get('content-type') || '').toLowerCase();
       if (!r.ok) {
@@ -1253,18 +1299,26 @@ document.getElementById('submitBtn').addEventListener('click', () => {
       return r.json();
     })
     .then(data => {
-      setBusy(false);
       lastResult = data;
+      setBusy(false);
       renderStats(data.stats);
       activeTab = 'disc';
       setTab('disc');
       renderTab(data, 'disc');
+      document.getElementById('dlBtn').disabled = false;
       document.getElementById('results').classList.add('show');
       setTimeout(() => document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
     })
     .catch(e => {
-      if (e.name === 'AbortError') return;
       setBusy(false);
+      validateSubmit();
+      document.getElementById('dlBtn').disabled = !lastResult;
+      if (e.name === 'AbortError') {
+        if (compareAbort && compareAbort.__timedOut) {
+          showErr('Comparison timed out. Please try again.');
+        }
+        return;
+      }
       showErr('Request failed: ' + e.message);
     });
 });
@@ -1287,7 +1341,7 @@ document.getElementById('dlBtn').addEventListener('click', () => {
   fd.append('suvidha_key',       document.getElementById('suvidhaKey').value);
   appendUploadParams(fd);
 
-  fetch('/api/download', { method: 'POST', body: fd, signal: downloadAbort.signal })
+  postForm('/api/download', fd, downloadAbort)
     .then(async r => {
       const ct = (r.headers.get('content-type') || '').toLowerCase();
       if (!r.ok) {
@@ -1314,7 +1368,14 @@ document.getElementById('dlBtn').addEventListener('click', () => {
       dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
     })
     .catch(e => {
-      if (e.name === 'AbortError') return;
+      if (e.name === 'AbortError') {
+        if (downloadAbort && downloadAbort.__timedOut) {
+          showErr('Download timed out. Please try again.');
+        }
+        dl.disabled = false;
+        dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
+        return;
+      }
       showErr(e.message);
       dl.disabled = false;
       dl.innerHTML = '⬇&nbsp; Download Report (.xlsx)';
@@ -1353,10 +1414,13 @@ function renderStats(s) {
 // ── render tab content ────────────────────────────────────────────────────────
 function renderTab(r, tab) {
   const c = document.getElementById('tabContent');
+  const banner = r.meta && r.meta.json_truncated
+    ? `<div class="preview-loading" style="margin:0 0 12px;color:var(--warn)">⚠ Large result sets are truncated in the browser view. Use the Excel download for the full report.</div>`
+    : '';
   c.innerHTML = '';
-  if (tab === 'disc') c.innerHTML = renderDisc(r);
-  if (tab === 'oa')   c.innerHTML = renderOnly(r.only_admin_rows, r.admin_cols, 'oa-row');
-  if (tab === 'os')   c.innerHTML = renderOnly(r.only_suv_rows,   r.suv_cols,   'os-row');
+  if (tab === 'disc') c.innerHTML = banner + renderDisc(r);
+  if (tab === 'oa')   c.innerHTML = banner + renderOnly(r.only_admin_rows, r.admin_cols, 'oa-row');
+  if (tab === 'os')   c.innerHTML = banner + renderOnly(r.only_suv_rows,   r.suv_cols,   'os-row');
 }
 
 // ── discrepancies table ───────────────────────────────────────────────────────
@@ -1367,6 +1431,8 @@ function renderDisc(r) {
   }
 
   const adminCols = r.admin_cols || [];
+  const unmappedAdminCols = new Set((r.unmapped && r.unmapped.admin_cols) || []);
+  const unmappedSuvCols = (r.unmapped && r.unmapped.suv_cols) || [];
 
   // ✅ Build column map (admin → suvidha)
   const columnMap = {};
@@ -1374,17 +1440,7 @@ function renderDisc(r) {
     columnMap[p.admin_col] = p.suv_col;
   });
 
-  // ✅ Handle extra SUV-only columns
-  const suvOnlyCols = [];
-  details.forEach(item => {
-    Object.keys(item.diffs || {}).forEach(k => {
-      if (k.startsWith('[SUV] ')) {
-        const name = k.replace('[SUV] ', '');
-        const label = `SUV::${name}`;
-        if (!suvOnlyCols.includes(label)) suvOnlyCols.push(label);
-      }
-    });
-  });
+  const suvOnlyCols = [...new Set(unmappedSuvCols.map(name => `SUV::${name}`))];
 
   const columns = [...adminCols, ...suvOnlyCols];
 
@@ -1393,21 +1449,24 @@ function renderDisc(r) {
     if (col.startsWith('SUV::')) {
       const raw = col.replace('SUV::', '');
       const key = `[SUV] ${raw}`;
-      return diffs[key]?.suvidha ?? '';
+      return diffs[key]?.suvidha ?? suvRow[raw] ?? '';
     }
 
     // mapped column
     const mapped = columnMap[col] || col;
+    if (unmappedAdminCols.has(col)) {
+      return 'COLUMN NOT FOUND';
+    }
 
     let val = suvRow[mapped];
     // fallback
     if (val === undefined || val === null || val === '') {
-      val = suvRow[col] ?? '';
+      val = columnMap[col] ? (suvRow[col] ?? '') : 'COLUMN NOT FOUND';
     }
 
     // handle COLUMN_NOT_FOUND
     if (val === "COLUMN NOT FOUND") {
-      return "⚠ Missing";
+      return "COLUMN NOT FOUND";
     }
 
     return val;
@@ -1424,24 +1483,19 @@ function renderDisc(r) {
     const diffs = item.diffs || {};
 
     // build diff set
-    const diffSet = new Set(item.diff_cols || []);
-    Object.keys(diffs).forEach(k => {
-      if (k.startsWith('[SUV] ')) {
-        diffSet.add(`SUV::${k.replace('[SUV] ', '')}`);
-      }
-    });
+    const diffSet = new Set([...(item.diff_cols || []), ...(item.suv_diff_cols || [])]);
 
     // ── ADMIN ROW ──
     html += `<tr class="a-row">
       <td><span class="badge-src a">Admin</span></td>
       ${columns.map(col => {
-        const isDiff = diffSet.has(col);
+        const isDiff = diffSet.has(col) || unmappedAdminCols.has(col);
 
         let val;
         if (col.startsWith('SUV::')) {
           const raw = col.replace('SUV::', '');
           const key = `[SUV] ${raw}`;
-          val = diffs[key]?.admin ?? 'COLUMN NOT FOUND';
+          val = 'COLUMN NOT FOUND';
         } else {
           val = adminRow[col] ?? '';
         }
@@ -1454,7 +1508,7 @@ function renderDisc(r) {
     html += `<tr class="s-row">
       <td><span class="badge-src s">Suvidha</span></td>
       ${columns.map(col => {
-        const isDiff = diffSet.has(col);
+        const isDiff = diffSet.has(col) || unmappedAdminCols.has(col);
         const val = getSuvValue(suvRow, col, diffs);
         return `<td class="${isDiff ? 'diff' : ''}">${esc(val)}</td>`;
       }).join('')}
