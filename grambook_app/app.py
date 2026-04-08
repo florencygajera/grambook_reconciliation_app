@@ -69,6 +69,7 @@ MAX_ID_LENGTH = 256
 ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200D\uFEFF]")
 CONTROL_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
 SPACE_RE = re.compile(r"\s+")
+DIGITS_ONLY_RE = re.compile(r"^\d+$")
 
 DIGIT_TRANSLATION = str.maketrans(
     {
@@ -125,7 +126,7 @@ def _clean_text(value: Any) -> str:
 
 
 def _normalize_gujarati_terms(text: str) -> str:
-    # FIXED: normalize common Gujarati variants before compact matching.
+    # Normalize common Gujarati variants before comparison.
     out = text
     out = out.replace("\u00a0", " ")
     out = out.replace("_", " ")
@@ -302,7 +303,7 @@ def _parse_column_index(value: str | None) -> int | None:
     text = str(value).strip()
     if not text:
         return None
-    if not re.fullmatch(r"\d+", text):
+    if not DIGITS_ONLY_RE.fullmatch(text):
         raise ReconciliationError("Column index must be a non-negative integer.")
     index = int(text)
     if index > MAX_COLUMN_INDEX:
@@ -399,6 +400,7 @@ def _cache_entry_age(entry: dict[str, Any], fallback_cached_at: float | None = N
 
 def _cache_result(cache_key: str, result: dict[str, Any]) -> None:
     entry = _wrap_cache_result(result)
+    tmp_path = None
     with RESULT_CACHE_LOCK:
         RESULT_CACHE[cache_key] = entry
         RESULT_CACHE_ORDER[:] = [k for k in RESULT_CACHE_ORDER if k != cache_key]
@@ -417,11 +419,11 @@ def _cache_result(cache_key: str, result: dict[str, Any]) -> None:
     except Exception:
         logger.debug("Failed to persist cache entry %s", cache_key)
         try:
-            tmp_path.unlink(missing_ok=True)
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
         except Exception:
             pass
-    with RESULT_CACHE_LOCK:
-        _prune_disk_cache()
+    _prune_disk_cache()
 
 
 def _prune_disk_cache() -> None:
@@ -434,6 +436,12 @@ def _prune_disk_cache() -> None:
         LAST_DISK_PRUNE_AT = now
     cutoff = now - RESULT_CACHE_TTL_SECONDS
     for path in RESULT_CACHE_DIR.glob("*.json"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+        except Exception:
+            continue
+    for path in RESULT_CACHE_DIR.glob("*.tmp"):
         try:
             if path.stat().st_mtime < cutoff:
                 path.unlink(missing_ok=True)
@@ -463,12 +471,13 @@ def _lookup_cached_result(cache_key: str) -> dict[str, Any] | None:
     if not cache_path.exists():
         return None
     try:
+        file_mtime = cache_path.stat().st_mtime
         cached_entry = json.loads(cache_path.read_text(encoding="utf-8"))
     except Exception:
         return None
     if not isinstance(cached_entry, dict):
         return None
-    cached_at = _cache_entry_age(cached_entry, cache_path.stat().st_mtime)
+    cached_at = _cache_entry_age(cached_entry, file_mtime)
     if cached_at is not None and time.time() - cached_at > RESULT_CACHE_TTL_SECONDS:
         try:
             cache_path.unlink(missing_ok=True)
@@ -496,7 +505,7 @@ def normalize_key(value: Any) -> str:
     v = _clean_text(value)
     if not v:
         return ""
-    if re.fullmatch(r"\d+", v):
+    if DIGITS_ONLY_RE.match(v):
         if set(v) == {"0"}:
             return v[:MAX_ID_LENGTH]
         normalized = v.lstrip("0")
@@ -531,18 +540,10 @@ def _excel_styles() -> dict[str, Any]:
 def _build_discrepancy_report_buffer(
     result: dict[str, Any],
 ) -> tempfile.SpooledTemporaryFile:
-    def normalize_export_value(v: Any) -> str:
-        if v is None:
-            return ""
-        v = str(v).strip()
-        if v == "":
-            return ""
-        return v
-
     styles = _excel_styles()
     wb = Workbook(write_only=True)
 
-    def _wo_cell(ws, value, *, fill=None, font=None, align="left", wrap=False, border):
+    def _wo_cell(ws, value, *, fill=None, font=None, align="left", wrap=False, border=None):
         cell = WriteOnlyCell(ws, value=value)
         if fill is not None:
             cell.fill = fill
@@ -558,6 +559,12 @@ def _build_discrepancy_report_buffer(
         if isinstance(value, list):
             return list(value)
         return []
+
+    def _diff_columns(item: dict[str, Any], width: int) -> set[int]:
+        diffs = item.get("diff_columns")
+        if isinstance(diffs, list):
+            return {int(idx) for idx in diffs if isinstance(idx, int) and 0 <= idx < width}
+        return set()
 
     items = list(result.get("mismatches", []))
     ws = wb.create_sheet("Mismatches")
@@ -617,12 +624,7 @@ def _build_discrepancy_report_buffer(
         admin_row = _row_list(item, "admin")
         suv_row = _row_list(item, "suvidha")
         width = max(len(admin_row), len(suv_row), max_width)
-        diff_cols = [
-            idx
-            for idx in range(width)
-            if normalize_export_value(admin_row[idx] if idx < len(admin_row) else "")
-            != normalize_export_value(suv_row[idx] if idx < len(suv_row) else "")
-        ]
+        diff_cols = _diff_columns(item, width)
 
         for source_label, source_row, fill, diff_fill, font in [
             (
@@ -671,9 +673,13 @@ def _build_discrepancy_report_buffer(
         )
 
     buf = tempfile.SpooledTemporaryFile(max_size=10 * 1024 * 1024, mode="w+b")
-    wb.save(buf)
-    buf.seek(0)
-    return buf
+    try:
+        wb.save(buf)
+        buf.seek(0)
+        return buf
+    except Exception:
+        buf.close()
+        raise
 
 
 def reconcile_raw(

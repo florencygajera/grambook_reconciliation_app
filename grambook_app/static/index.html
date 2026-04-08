@@ -299,6 +299,7 @@ let adminFile = null;
 let suvidhaFile = null;
 let lastCacheKey = null;
 let csrfToken = '';
+let csrfReadyFailed = false;
 let adminColumnCount = 0;
 let suvidhaColumnCount = 0;
 let serverColumnCount = 0;
@@ -306,7 +307,7 @@ let serverColumnCount = 0;
 const csrfReady = fetch('/api/csrf')
   .then(r => r.json())
   .then(data => { csrfToken = data.token || ''; })
-  .catch(() => { csrfToken = ''; });
+  .catch(() => { csrfReadyFailed = true; csrfToken = ''; });
 
 function esc(value) {
   return String(value ?? '')
@@ -454,7 +455,13 @@ async function updateColumnCountFromFile(side, file) {
 }
 
 async function postForm(url, formData) {
+  if (csrfReadyFailed) {
+    throw new Error('Session error. Please refresh the page.');
+  }
   await csrfReady;
+  if (!csrfToken) {
+    throw new Error('Session error. Please refresh the page.');
+  }
   const response = await fetch(url, {
     method: 'POST',
     body: formData,
@@ -592,7 +599,13 @@ document.getElementById('downloadBtn').addEventListener('click', async () => {
     return;
   }
   try {
+    if (csrfReadyFailed) {
+      throw new Error('Session error. Please refresh the page.');
+    }
     await csrfReady;
+    if (!csrfToken) {
+      throw new Error('Session error. Please refresh the page.');
+    }
     const useCacheKey = !!lastCacheKey;
     if (!useCacheKey) {
       showWarn('Generating the report from the current files and selected column.');
@@ -618,9 +631,11 @@ document.getElementById('downloadBtn').addEventListener('click', async () => {
     const contentType = (response.headers.get('content-type') || '').toLowerCase();
     if (contentType.includes('application/json')) {
       const data = await response.json();
-      if (data.error) throw new Error(data.error);
+      throw new Error(data.error || `Download failed (${response.status})`);
     }
-    if (!response.ok) throw new Error('Download failed');
+    if (!response.ok) {
+      throw new Error(`Download failed (${response.status})`);
+    }
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
