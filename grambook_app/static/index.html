@@ -59,7 +59,8 @@ body {
   border-left: 4px solid var(--bad);
   color: var(--bad);
 }
-.error.show { display: block; }
+  .error.show { display: block; }
+  .error.warn { border-left-color: var(--warn); color: var(--warn); }
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -223,6 +224,7 @@ tr:last-child td { border-bottom: 0; }
   color: var(--muted);
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -295,9 +297,11 @@ tr:last-child td { border-bottom: 0; }
 <script>
 let adminFile = null;
 let suvidhaFile = null;
-let lastResult = null;
 let lastCacheKey = null;
 let csrfToken = '';
+let adminColumnCount = 0;
+let suvidhaColumnCount = 0;
+let serverColumnCount = 0;
 
 const csrfReady = fetch('/api/csrf')
   .then(r => r.json())
@@ -312,14 +316,25 @@ function esc(value) {
     .replace(/"/g, '&quot;');
 }
 
-function showErr(message) {
+function showBanner(message, kind = 'error') {
   const el = document.getElementById('errBanner');
   el.textContent = message;
   el.classList.add('show');
+  el.classList.toggle('warn', kind === 'warn');
+}
+
+function showErr(message) {
+  showBanner(message, 'error');
+}
+
+function showWarn(message) {
+  showBanner(message, 'warn');
 }
 
 function clearErr() {
-  document.getElementById('errBanner').classList.remove('show');
+  const el = document.getElementById('errBanner');
+  el.classList.remove('show');
+  el.classList.remove('warn');
 }
 
 function columnLabel(index) {
@@ -333,45 +348,110 @@ function columnLabel(index) {
   return label;
 }
 
-function populateColumns() {
+function populateColumns(count = 50) {
   const sel = document.getElementById('idColumn');
+  const previous = sel.value;
+  const limit = Math.max(1, Math.min(Number(count) || 50, 1000));
   let html = '<option value="" selected disabled>Select a column</option>';
-  for (let i = 0; i < 50; i += 1) {
+  for (let i = 0; i < limit; i += 1) {
     html += `<option value="${i}">Column ${columnLabel(i)} (${i + 1})</option>`;
   }
   sel.innerHTML = html;
-  sel.value = '0';
+  if (previous !== '' && Number(previous) < limit) {
+    sel.value = previous;
+  } else if (limit > 0) {
+    sel.value = '0';
+  }
+}
+
+function refreshColumns() {
+  const count = Math.max(adminColumnCount || 0, suvidhaColumnCount || 0, serverColumnCount || 0, 50);
+  populateColumns(count);
 }
 
 function updateButtons() {
   const hasFiles = !!adminFile && !!suvidhaFile;
   const hasColumn = document.getElementById('idColumn').value !== '';
   document.getElementById('compareBtn').disabled = !(hasFiles && hasColumn);
-  document.getElementById('downloadBtn').disabled = !lastResult;
+  document.getElementById('downloadBtn').disabled = !(hasFiles && hasColumn);
 }
 
-function setFile(input, targetName, setter) {
+function setFile(input, targetName, side, setter) {
   input.addEventListener('change', () => {
     const file = input.files && input.files[0];
     if (!file) return;
     setter(file);
-    lastResult = null;
     lastCacheKey = null;
+    serverColumnCount = 0;
+    document.getElementById('stats').style.display = 'none';
+    document.getElementById('results').style.display = 'none';
     document.getElementById(targetName).textContent = file.name;
     clearErr();
+    refreshColumns();
+    updateColumnCountFromFile(side, file);
     updateButtons();
   });
 }
 
-setFile(document.getElementById('adminFile'), 'adminName', file => { adminFile = file; });
-setFile(document.getElementById('suvidhaFile'), 'suvidhaName', file => { suvidhaFile = file; });
-populateColumns();
+setFile(document.getElementById('adminFile'), 'adminName', 'admin', file => { adminFile = file; });
+setFile(document.getElementById('suvidhaFile'), 'suvidhaName', 'suvidha', file => { suvidhaFile = file; });
+refreshColumns();
 
 document.getElementById('idColumn').addEventListener('change', () => {
-  lastResult = null;
   lastCacheKey = null;
+  document.getElementById('stats').style.display = 'none';
+  document.getElementById('results').style.display = 'none';
   updateButtons();
 });
+
+function inferColumnCountFromFile(file) {
+  return new Promise(resolve => {
+    if (!window.XLSX || !file) {
+      resolve(null);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = event => {
+      try {
+        const data = new Uint8Array(event.target.result);
+        // XLSX parsing still has to unpack the workbook ZIP; sheetRows only
+        // limits the rows materialized after the sheet is opened.
+        const workbook = XLSX.read(data, { type: 'array', cellDates: true, sheetRows: 1 });
+        const sheetName = workbook.SheetNames && workbook.SheetNames[0];
+        if (!sheetName) {
+          resolve(0);
+          return;
+        }
+        const sheet = workbook.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet, {
+          header: 1,
+          blankrows: false,
+          raw: false,
+          defval: '',
+        });
+        const headerRow = rows.find(row => Array.isArray(row) && row.some(cell => String(cell ?? '').trim() !== '')) || [];
+        resolve(headerRow.length || 0);
+      } catch (err) {
+        resolve(null);
+      }
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function updateColumnCountFromFile(side, file) {
+  const count = await inferColumnCountFromFile(file);
+  if (count == null || !Number.isFinite(count)) {
+    return;
+  }
+  if (side === 'admin') {
+    adminColumnCount = count;
+  } else if (side === 'suvidha') {
+    suvidhaColumnCount = count;
+  }
+  refreshColumns();
+}
 
 async function postForm(url, formData) {
   await csrfReady;
@@ -381,24 +461,34 @@ async function postForm(url, formData) {
     headers: { 'X-Grambook-CSRF': csrfToken },
   });
   const contentType = (response.headers.get('content-type') || '').toLowerCase();
-  const data = contentType.includes('application/json') ? await response.json() : { error: await response.text() };
-  if (!response.ok || data.error) {
-    throw new Error(data.error || 'Request failed');
+  if (contentType.includes('application/json')) {
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error || `Request failed (${response.status})`);
+    }
+    return data;
   }
-  return data;
+  if (!response.ok) {
+    throw new Error(`Request failed (${response.status})`);
+  }
+  return { ok: true };
 }
 
 function renderRows(rows) {
   if (!rows || !rows.length) {
     return '<div class="empty">No records</div>';
   }
-  const width = rows.reduce((max, row) => Math.max(max, row.length || 0), 0);
+  const width = rows.reduce((max, item) => Math.max(max, Array.isArray(item.row) ? item.row.length || 0 : 0), 0);
   const headers = Array.from({ length: width }, (_, i) => `Column ${columnLabel(i)}`);
   let html = '<div class="table-wrap"><table><thead><tr><th>ID</th><th>Row #</th>';
   headers.forEach(h => { html += `<th>${esc(h)}</th>`; });
   html += '</tr></thead><tbody>';
   rows.forEach(item => {
-    const row = item.row || item.admin || item.suvidha || [];
+    const row = Array.isArray(item.row) ? item.row : null;
+    if (!row) {
+      html += `<tr><td colspan="${width + 2}"><span class="badge bad">Error</span> Missing row data for ${esc(item.id || 'unknown id')}</td></tr>`;
+      return;
+    }
     html += `<tr><td>${esc(item.id || '')}</td><td>${esc(item.row_number || '')}</td>`;
     for (let i = 0; i < width; i += 1) {
       const val = row[i] ?? '';
@@ -462,8 +552,9 @@ async function compareFiles() {
   document.getElementById('compareBtn').disabled = true;
   try {
     const data = await postForm('/reconcile', formData);
-    lastResult = data;
     lastCacheKey = data.cache_key || null;
+    serverColumnCount = Number(data.column_count || (data.meta && data.meta.column_count) || 0) || 0;
+    refreshColumns();
     document.getElementById('stats').style.display = 'grid';
     document.getElementById('results').style.display = 'block';
     const mismatches = data.mismatches || [];
@@ -475,6 +566,13 @@ async function compareFiles() {
     document.getElementById('mismatchWrap').innerHTML = renderMismatches(mismatches);
     document.getElementById('adminOnlyWrap').innerHTML = renderRows(adminOnly);
     document.getElementById('suvidhaOnlyWrap').innerHTML = renderRows(suvidhaOnly);
+    const duplicates = data.duplicates || [];
+    if (duplicates.length) {
+      const preview = duplicates.slice(0, 3).map(item => `${item.source}:${item.id} (rows ${item.replaced_row_number} -> ${item.row_number})`).join(', ');
+      showWarn(`Duplicate IDs detected: ${duplicates.length}. ${preview}${duplicates.length > 3 ? '...' : ''}`);
+    } else {
+      clearErr();
+    }
   } catch (err) {
     showErr(err.message);
   } finally {
@@ -485,13 +583,20 @@ async function compareFiles() {
 document.getElementById('compareBtn').addEventListener('click', compareFiles);
 
 document.getElementById('downloadBtn').addEventListener('click', async () => {
-  if (!adminFile || !suvidhaFile || document.getElementById('idColumn').value === '') {
-    showErr('Upload both files and select a column first.');
+  if (!adminFile || !suvidhaFile) {
+    showErr('Upload both files before downloading.');
+    return;
+  }
+  if (document.getElementById('idColumn').value === '') {
+    showErr('Select a unique ID column before downloading.');
     return;
   }
   try {
     await csrfReady;
     const useCacheKey = !!lastCacheKey;
+    if (!useCacheKey) {
+      showWarn('Generating the report from the current files and selected column.');
+    }
     const response = await fetch('/api/download', {
       method: 'POST',
       headers: useCacheKey

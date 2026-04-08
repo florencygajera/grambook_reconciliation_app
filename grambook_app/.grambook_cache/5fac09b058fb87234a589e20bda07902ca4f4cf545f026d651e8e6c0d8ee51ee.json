@@ -1,0 +1,1 @@
+{"mismatches": [{"id": "2", "diff_columns": [1], "admin": ["2", "B"], "suvidha": ["2", "C"], "admin_row_number": 3, "suvidha_row_number": 3}], "admin_only": [], "suvidha_only": [], "stats": {"total": 3, "mismatched": 1, "only_a": 0, "only_s": 0, "matched": 2}, "meta": {"id_column_index": 0, "comparison_mode": "column_position"}}
